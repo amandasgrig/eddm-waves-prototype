@@ -1860,6 +1860,7 @@ function TargetingCard({
         ) : (
           <RouteTable
             location={location}
+            radius={tools.radius}
             views={views}
             audience={audience}
             fitFilters={fitFilters}
@@ -1920,11 +1921,13 @@ type SortKey = "route" | "residences" | "fit" | "cost"
 
 /**
  * The Table view of the Targeting card, as on the USPS EDDM tool: every route of one ZIP code at a
- * time. It opens on the ZIP of the searched place; the user can switch to a ZIP around it. A ticked
- * row is in the wave chosen in "Add routes to", with the same rule as a click on the map.
+ * time. It opens on the ZIP of the searched place; the user can switch to another ZIP that has
+ * routes within the radius. A ticked row is in the wave chosen in "Add routes to", with the same
+ * rule as a click on the map.
  */
 function RouteTable({
   location,
+  radius,
   views,
   audience,
   fitFilters,
@@ -1936,6 +1939,8 @@ function RouteTable({
   children,
 }: {
   location: Location
+  /** Routes load up to this many miles from the place; the ZIP list follows it. */
+  radius: number
   views: WaveView[]
   audience: AudienceProps
   fitFilters: AudienceFilters | null
@@ -1954,11 +1959,15 @@ function RouteTable({
     place: location.id,
     zip: placeZip(location),
   })
-  const zip = picked.place === location.id ? picked.zip : placeZip(location)
-  const zips = React.useMemo(
-    () => [...new Set(location.zips.flat())].sort(),
-    [location]
-  )
+  // The place's own ZIP first, then the other ZIPs that have routes within the radius.
+  const own = placeZip(location)
+  const around = ROUTES.filter(
+    (r) => r.location === location.id && r.reach <= radius && r.zip !== own
+  ).map((r) => r.zip)
+  const zips = [own, ...[...new Set(around)].sort()]
+  // A smaller radius can drop the picked ZIP from the list; the table goes back to the place's own.
+  const zip =
+    picked.place === location.id && zips.includes(picked.zip) ? picked.zip : own
   // No sort chosen: best fit first when filters apply, else by route number.
   const [sort, setSort] = React.useState<{
     key: SortKey
@@ -2059,7 +2068,7 @@ function RouteTable({
               {zips.map((z) => (
                 <SelectItem key={z} value={z} className="tabular-nums">
                   {z}
-                  {z === placeZip(location) && (
+                  {z === own && (
                     <span className="text-muted-foreground">
                       · {location.label}
                     </span>
