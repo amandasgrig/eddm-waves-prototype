@@ -2,6 +2,9 @@ import * as React from "react"
 import { addDays } from "date-fns"
 import { toast } from "sonner"
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   BarChart3,
   CalendarDays,
   Check,
@@ -23,9 +26,11 @@ import {
   Settings,
   Sparkles,
   X,
+  Map as MapIcon,
   MapPin,
   Merge,
   Split,
+  Table2,
   Trash2,
   Users,
   Workflow,
@@ -34,7 +39,12 @@ import { cn } from "cn"
 
 import { DatePicker } from "@/components/date-picker"
 import { IconButton } from "@/components/icon-button"
-import { MAP_PILL, RouteMap, type MapTools } from "@/components/route-map"
+import {
+  MAP_PILL,
+  PANEL_WIDTH,
+  RouteMap,
+  type MapTools,
+} from "@/components/route-map"
 import { searchPlaces } from "@/lib/geocode"
 import {
   AlertDialog,
@@ -48,6 +58,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
   CardAction,
@@ -112,6 +123,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   Tooltip,
   TooltipContent,
@@ -130,6 +142,7 @@ import {
   addLocation,
   buildWaveViews,
   countFilters,
+  fitPercent,
   suggestRoutes,
   SUGGEST_PAGE,
   fmtDate,
@@ -448,6 +461,17 @@ export function App() {
         ),
       }))
     },
+    /** Removes routes from the selected wave, or from every wave when "All waves" is selected. One undo step. */
+    removeRoutes(routes: Route[]) {
+      setState((s) => ({
+        ...s,
+        assignment: routes.reduce(
+          (a, r) =>
+            targetIds.reduce((b, id) => withRoute(b, r.id, id, false), a),
+          s.assignment
+        ),
+      }))
+    },
     /** Removes a route from the selected wave, or from every wave when "All waves" is selected. */
     removeFromActive(routeId: string) {
       setState((s) => ({
@@ -664,6 +688,13 @@ export function App() {
                     pieces={pieces}
                     onToggle={actions.toggleRoute}
                     onOpenMap={() => setMapOpen(true)}
+                    fitFilters={
+                      suggested && countFilters(suggested) > 0
+                        ? suggested
+                        : null
+                    }
+                    onAddMany={actions.addRoutes}
+                    onRemoveMany={actions.removeRoutes}
                   />
 
                   <ScheduleCard
@@ -1713,6 +1744,9 @@ function TargetingCard({
   pieces,
   onToggle,
   onOpenMap,
+  fitFilters,
+  onAddMany,
+  onRemoveMany,
 }: {
   colors: Record<string, string[]>
   hint: (route: Route) => React.ReactNode
@@ -1730,9 +1764,34 @@ function TargetingCard({
   pieces: number
   onToggle: (route: Route) => void
   onOpenMap: () => void
+  /** The audience filters the current suggestions come from. Null when the user has not applied any. */
+  fitFilters: AudienceFilters | null
+  onAddMany: (routes: Route[]) => void
+  onRemoveMany: (routes: Route[]) => void
 }) {
   const [filtersOpen, setFiltersOpen] = React.useState(false)
+  const [view, setView] = React.useState<"map" | "table">("map")
   const showErrors = React.useContext(ShowErrors)
+  const panel = filtersOpen && (
+    <AudiencePanel audience={audience} onClose={() => setFiltersOpen(false)} />
+  )
+  const suggestions = (
+    <AudienceButton
+      side="right"
+      open={filtersOpen}
+      onOpenChange={setFiltersOpen}
+    />
+  )
+  const waveSelect = (className?: string) => (
+    <WaveSelect
+      views={views}
+      activeId={activeId}
+      onActiveChange={onActiveChange}
+      onAddWave={onAddWave}
+      onRemoveWave={onRemoveWave}
+      className={className}
+    />
+  )
   return (
     <Card className="overflow-visible">
       <CardHeader>
@@ -1741,6 +1800,24 @@ function TargetingCard({
           Choose the carrier routes to mail. Every residence on a selected route
           gets a piece.
         </CardDescription>
+        <CardAction>
+          <ToggleGroup
+            variant="outline"
+            size="sm"
+            aria-label="View routes as"
+            value={[view]}
+            onValueChange={([next]) => {
+              if (next === "map" || next === "table") setView(next)
+            }}
+          >
+            <ToggleGroupItem value="map" aria-label="View as map">
+              <MapIcon /> Map
+            </ToggleGroupItem>
+            <ToggleGroupItem value="table" aria-label="View as table">
+              <Table2 /> Table
+            </ToggleGroupItem>
+          </ToggleGroup>
+        </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex flex-col gap-2">
@@ -1752,51 +1829,49 @@ function TargetingCard({
             trailing={<RadiusSelect tools={tools} />}
           />
         </div>
-        <RouteMap
-          colors={colors}
-          hint={hint}
-          onToggle={onToggle}
-          highlight={audience.ids}
-          spotlight={audience.spotId}
-          scrollZoom={false}
-          {...tools}
-          className="h-96"
-          sidePanel={
-            filtersOpen && (
-              <AudiencePanel
-                audience={audience}
-                onClose={() => setFiltersOpen(false)}
-              />
-            )
-          }
-          viewControl={
-            <div className={MAP_PILL}>
-              <IconButton
-                variant="ghost"
-                size="icon-sm"
-                label="Open map"
-                side="left"
-                onClick={onOpenMap}
-              >
-                <Expand />
-              </IconButton>
-            </div>
-          }
-        >
-          <WaveSelect
+        {view === "map" ? (
+          <RouteMap
+            colors={colors}
+            hint={hint}
+            onToggle={onToggle}
+            highlight={audience.ids}
+            spotlight={audience.spotId}
+            scrollZoom={false}
+            {...tools}
+            className="h-96"
+            sidePanel={panel}
+            viewControl={
+              <div className={MAP_PILL}>
+                <IconButton
+                  variant="ghost"
+                  size="icon-sm"
+                  label="Open map"
+                  side="left"
+                  onClick={onOpenMap}
+                >
+                  <Expand />
+                </IconButton>
+              </div>
+            }
+          >
+            {waveSelect("absolute top-3 left-3")}
+            {suggestions}
+          </RouteMap>
+        ) : (
+          <RouteTable
+            location={location}
             views={views}
-            activeId={activeId}
-            onActiveChange={onActiveChange}
-            onAddWave={onAddWave}
-            onRemoveWave={onRemoveWave}
-            className="absolute top-3 left-3"
-          />
-          <AudienceButton
-            side="right"
-            open={filtersOpen}
-            onOpenChange={setFiltersOpen}
-          />
-        </RouteMap>
+            audience={audience}
+            fitFilters={fitFilters}
+            onToggle={onToggle}
+            onAddMany={onAddMany}
+            onRemoveMany={onRemoveMany}
+            toolbar={waveSelect()}
+            sidePanel={panel}
+          >
+            {suggestions}
+          </RouteTable>
+        )}
         <div className="flex items-center justify-between">
           {routeCount === 0 ? (
             <span
@@ -1806,7 +1881,9 @@ function TargetingCard({
               )}
             >
               {showErrors && <CircleAlert className="size-3.5 shrink-0" />}
-              No routes selected. Click a route on the map to add it to Wave 1.
+              {view === "map"
+                ? "No routes selected. Click a route on the map to add it to Wave 1."
+                : "No routes selected. Tick a route in the table to add it to Wave 1."}
             </span>
           ) : (
             <span>
@@ -1833,6 +1910,279 @@ function TargetingCard({
         </div>
       </CardContent>
     </Card>
+  )
+}
+
+/** The searched place's own ZIP code: the middle of its ZIP grid. */
+const placeZip = (location: Location) => location.zips[1][1]
+
+type SortKey = "route" | "residences" | "fit" | "cost"
+
+/**
+ * The Table view of the Targeting card, as on the USPS EDDM tool: every route of one ZIP code at a
+ * time. It opens on the ZIP of the searched place; the user can switch to a ZIP around it. A ticked
+ * row is in the wave chosen in "Add routes to", with the same rule as a click on the map.
+ */
+function RouteTable({
+  location,
+  views,
+  audience,
+  fitFilters,
+  onToggle,
+  onAddMany,
+  onRemoveMany,
+  toolbar,
+  sidePanel,
+  children,
+}: {
+  location: Location
+  views: WaveView[]
+  audience: AudienceProps
+  fitFilters: AudienceFilters | null
+  onToggle: (route: Route) => void
+  onAddMany: (routes: Route[]) => void
+  onRemoveMany: (routes: Route[]) => void
+  /** Controls on the left of the toolbar (the "Add routes to" picker) */
+  toolbar: React.ReactNode
+  /** The Route suggestions panel, docked on the right as on the map */
+  sidePanel?: React.ReactNode
+  /** Floats in the top right corner (the Route suggestions button) */
+  children?: React.ReactNode
+}) {
+  // A new search shows the ZIP of the new place.
+  const [picked, setPicked] = React.useState({
+    place: location.id,
+    zip: placeZip(location),
+  })
+  const zip = picked.place === location.id ? picked.zip : placeZip(location)
+  const zips = React.useMemo(
+    () => [...new Set(location.zips.flat())].sort(),
+    [location]
+  )
+  // No sort chosen: best fit first when filters apply, else by route number.
+  const [sort, setSort] = React.useState<{
+    key: SortKey
+    desc: boolean
+  } | null>(null)
+  const active =
+    sort ??
+    (fitFilters ? { key: "fit", desc: true } : { key: "route", desc: false })
+  const fit = (r: Route) => (fitFilters ? fitPercent(r, fitFilters) : 0)
+
+  // Cost sorts like residences: every row has the same price per piece.
+  const value = (r: Route) =>
+    active.key === "route"
+      ? r.code
+      : active.key === "fit"
+        ? fit(r)
+        : r.residences
+  const rows = ROUTES.filter(
+    (r) => r.location === location.id && r.zip === zip
+  ).sort((a, b) => {
+    const va = value(a)
+    const vb = value(b)
+    const order = va < vb ? -1 : va > vb ? 1 : a.code.localeCompare(b.code)
+    return active.desc ? -order : order
+  })
+
+  const inTarget = rows.filter((r) => audience.isAdded(r))
+  const allIn = rows.length > 0 && inTarget.length === rows.length
+  const zipResidences = rows.reduce((s, r) => s + r.residences, 0)
+  const panelOpen = Boolean(sidePanel)
+
+  const header = (
+    key: SortKey,
+    label: string,
+    align: "left" | "right" = "right"
+  ) => {
+    const on = active.key === key
+    const Icon = on ? (active.desc ? ArrowDown : ArrowUp) : ArrowUpDown
+    return (
+      <TableHead
+        className={align === "right" ? "text-right" : undefined}
+        aria-sort={on ? (active.desc ? "descending" : "ascending") : "none"}
+      >
+        <Button
+          variant="ghost"
+          size="xs"
+          className={cn("font-medium", align === "right" ? "-mr-2" : "-ml-2")}
+          onClick={() =>
+            setSort({
+              key,
+              desc: on
+                ? !active.desc
+                : key === "fit" || key === "residences" || key === "cost",
+            })
+          }
+        >
+          {label}
+          <Icon className={on ? undefined : "text-muted-foreground"} />
+        </Button>
+      </TableHead>
+    )
+  }
+
+  return (
+    <div
+      className="relative flex h-[30rem] flex-col overflow-hidden rounded-lg border bg-background"
+      role="group"
+      aria-label="Carrier routes table"
+    >
+      <div
+        className="flex items-center gap-1.5 border-b bg-muted/40 p-3 transition-[padding] duration-300"
+        style={{ paddingRight: panelOpen ? PANEL_WIDTH + 12 : undefined }}
+      >
+        {toolbar}
+        <div className={MAP_PILL}>
+          <span className="px-1.5 text-xs whitespace-nowrap text-muted-foreground">
+            ZIP code
+          </span>
+          <Select
+            items={zips.map((z) => ({ value: z, label: z }))}
+            value={zip}
+            onValueChange={(v) =>
+              v && setPicked({ place: location.id, zip: v })
+            }
+          >
+            <SelectTrigger
+              size="sm"
+              aria-label="ZIP code"
+              className="min-w-24 font-normal tabular-nums"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent
+              align="start"
+              alignItemWithTrigger={false}
+              className="min-w-56"
+            >
+              {zips.map((z) => (
+                <SelectItem key={z} value={z} className="tabular-nums">
+                  {z}
+                  {z === placeZip(location) && (
+                    <span className="text-muted-foreground">
+                      · {location.label}
+                    </span>
+                  )}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div
+        className="min-h-0 flex-1 overflow-y-auto transition-[padding] duration-300 [&_[data-slot=table-container]]:overflow-visible"
+        style={{ paddingRight: panelOpen ? PANEL_WIDTH : undefined }}
+      >
+        <Table>
+          <TableHeader className="sticky top-0 z-[1] bg-background shadow-[inset_0_-1px_0_var(--border)]">
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-10 pl-3">
+                <Checkbox
+                  checked={allIn}
+                  disabled={rows.length === 0}
+                  aria-label={
+                    allIn
+                      ? `Remove every route of ZIP ${zip} from ${audience.activeLabel}`
+                      : `Add every route of ZIP ${zip} to ${audience.activeLabel}`
+                  }
+                  onCheckedChange={() =>
+                    allIn
+                      ? onRemoveMany(rows)
+                      : onAddMany(rows.filter((r) => !audience.isAdded(r)))
+                  }
+                />
+              </TableHead>
+              {header("route", "Route", "left")}
+              {header("residences", "Residences")}
+              {fitFilters && header("fit", "Fit")}
+              {header("cost", "Cost", "right")}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={fitFilters ? 5 : 4}
+                  className="py-10 text-center text-muted-foreground"
+                >
+                  No routes in this ZIP code.
+                </TableCell>
+              </TableRow>
+            ) : (
+              rows.map((r) => {
+                const added = audience.isAdded(r)
+                return (
+                  <TableRow
+                    key={r.id}
+                    data-state={added ? "selected" : undefined}
+                    className={cn(
+                      "tabular-nums",
+                      audience.spotId === r.id && "bg-muted/50"
+                    )}
+                  >
+                    <TableCell className="pl-3">
+                      <Checkbox
+                        checked={added}
+                        aria-label={
+                          added
+                            ? `Remove ${r.zip} ${r.code} from ${audience.activeLabel}`
+                            : `Add ${r.zip} ${r.code} to ${audience.activeLabel}`
+                        }
+                        onCheckedChange={() => onToggle(r)}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <span className="flex items-center gap-2">
+                        <span className="font-medium">{r.id}</span>
+                        <RouteWaves route={r} views={views} />
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {fmtNum(r.residences)}
+                    </TableCell>
+                    {fitFilters && (
+                      <TableCell className="text-right">
+                        <FitBadge percent={fit(r)} />
+                      </TableCell>
+                    )}
+                    <TableCell className="pr-3 text-right">
+                      {fmtMoney(r.residences * audience.rate)}
+                    </TableCell>
+                  </TableRow>
+                )
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      <div
+        className="flex items-center justify-between gap-4 border-t bg-muted/40 px-3 py-2 text-xs text-muted-foreground tabular-nums transition-[padding] duration-300"
+        style={{ paddingRight: panelOpen ? PANEL_WIDTH + 12 : undefined }}
+      >
+        <span>
+          {fmtNum(rows.length)} {rows.length === 1 ? "route" : "routes"} in ZIP{" "}
+          {zip}
+          <span className="mx-1.5">·</span>
+          {fmtNum(zipResidences)} residences
+        </span>
+        <span>
+          {fmtNum(inTarget.length)} in {audience.activeLabel}
+        </span>
+      </div>
+
+      {children}
+      {sidePanel && (
+        <div
+          className="absolute inset-y-0 right-0 z-10 flex animate-in flex-col border-l bg-background shadow-lg duration-300 slide-in-from-right"
+          style={{ width: PANEL_WIDTH }}
+        >
+          {sidePanel}
+        </div>
+      )}
+    </div>
   )
 }
 

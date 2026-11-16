@@ -17,7 +17,7 @@ const KM_PER_MILE = 1.609344
 const STRIPE = 6
 const INK = "#18181b"
 /** Width of the side panel, in pixels. */
-const PANEL_WIDTH = 300
+export const PANEL_WIDTH = 300
 const PADDING = { top: 64, bottom: 60, left: 32, right: 32 }
 
 type Bounds = [[number, number], [number, number]]
