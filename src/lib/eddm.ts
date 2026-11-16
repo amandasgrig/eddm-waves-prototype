@@ -346,7 +346,7 @@ function buildLocation(place: Location, index: number) {
 }
 
 const BUILT = PLACES.map(buildLocation)
-/** Suggested places, shown before the user types. */
+/** The demo places: their routes are built in advance for the prototype states. */
 export const LOCATIONS = BUILT.map((b) => b.location)
 export const LOCATION_BY_ID: Record<string, Location> = Object.fromEntries(
   LOCATIONS.map((l) => [l.id, l])
@@ -519,12 +519,4 @@ export function splitRoutes(routeIds: string[], count: number): string[][] {
 
 export function scheduleDates(first: Date, count: number, everyWeeks: number) {
   return Array.from({ length: count }, (_, i) => nextWeekday(addDays(first, i * everyWeeks * 7)))
-}
-
-export function quote(groups: string[][]) {
-  return groups.map((ids) => {
-    const residences = ids.reduce((s, id) => s + ROUTE_BY_ID[id].residences, 0)
-    const price = pricePerPiece(residences)
-    return { routes: ids.length, residences, price, subtotal: residences * price }
-  })
 }

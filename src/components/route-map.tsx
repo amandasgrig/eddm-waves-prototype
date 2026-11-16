@@ -17,10 +17,12 @@ const KM_PER_MILE = 1.609344
 const STRIPE = 6
 const INK = "#18181b"
 /** Width of the side panel, in pixels. */
-const PANEL_WIDTH = 300
+export const PANEL_WIDTH = 300
 const PADDING = { top: 64, bottom: 60, left: 32, right: 32 }
 
 type Bounds = [[number, number], [number, number]]
+/** The contiguous United States: what the map shows before a place is chosen. */
+const US_BOUNDS: Bounds = [[-124.8, 24.4], [-66.9, 49.4]]
 type Point = { x: number; y: number }
 type RGB = [number, number, number]
 
@@ -144,6 +146,8 @@ type Props = MapTools & {
   viewControl?: React.ReactNode
   /** A panel on the right, inside the map (the audience filters). The map moves its content into the space that is left. */
   sidePanel?: React.ReactNode
+  /** Covers the map until a place is chosen. The map shows the whole country behind it, without its tools. */
+  overlay?: React.ReactNode
   className?: string
   children?: React.ReactNode
 }
@@ -162,6 +166,7 @@ export function RouteMap({
   scrollZoom = true,
   viewControl,
   sidePanel,
+  overlay,
   onAddArea,
   onUndo,
   onRedo,
@@ -187,7 +192,8 @@ export function RouteMap({
   const live = React.useRef({ tool, onToggle, onAddArea, routes })
   live.current = { tool, onToggle, onAddArea, routes }
 
-  const initialBounds = React.useRef(boundsOf(center, radius))
+  const overview = Boolean(overlay)
+  const initialBounds = React.useRef(overview ? US_BOUNDS : boundsOf(center, radius))
   React.useEffect(() => {
     const map = new MapLibre({
       container: container.current!,
@@ -372,14 +378,16 @@ export function RouteMap({
   }, [scrollZoom])
 
   // Fly to a new place; ease when only the radius changes.
-  const placeKey = center.join(",")
+  const placeKey = overview ? "overview" : center.join(",")
   const shown = React.useRef({ placeKey, radius })
   React.useEffect(() => {
     const map = mapRef.current
     if (!map || (shown.current.placeKey === placeKey && shown.current.radius === radius)) return
     const moved = shown.current.placeKey !== placeKey
     shown.current = { placeKey, radius }
-    const camera = map.cameraForBounds(boundsOf(center, radius), { padding: PADDING })
+    const camera = map.cameraForBounds(overview ? US_BOUNDS : boundsOf(center, radius), {
+      padding: PADDING,
+    })
     if (!camera) return
     if (moved) map.flyTo({ ...camera, duration: 2600, essential: true })
     else map.easeTo({ ...camera, duration: 500 })
@@ -389,11 +397,11 @@ export function RouteMap({
   React.useEffect(() => {
     const map = mapRef.current
     if (!map || !ready) return
-    ;(map.getSource("place") as GeoJSONSource).setData({
-      type: "Feature",
-      properties: {},
-      geometry: { type: "Point", coordinates: center },
-    })
+    ;(map.getSource("place") as GeoJSONSource).setData(
+      overview
+        ? { type: "FeatureCollection", features: [] }
+        : { type: "Feature", properties: {}, geometry: { type: "Point", coordinates: center } }
+    )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ready, placeKey])
 
@@ -546,7 +554,14 @@ export function RouteMap({
         </div>
       )}
 
-      <div className="absolute bottom-3 left-3 flex items-center gap-1.5">
+      {overlay && (
+        <div className="absolute inset-0 flex items-center justify-center bg-background/40 p-4">
+          {overlay}
+        </div>
+      )}
+
+      {/* The tools wait for a place: before one is chosen the overlay asks for it. */}
+      <div className={cn("absolute bottom-3 left-3 flex items-center gap-1.5", overview && "hidden")}>
         <div className={pill} role="group" aria-label="Selection tool">
           {(
             [
@@ -579,7 +594,12 @@ export function RouteMap({
       </div>
 
       {/* View controls: how the user looks at the map */}
-      <div className="absolute right-[calc(var(--map-panel)+0.75rem)] bottom-3 flex flex-col items-end gap-1.5 transition-[right] duration-300">
+      <div
+        className={cn(
+          "absolute right-[calc(var(--map-panel)+0.75rem)] bottom-3 flex flex-col items-end gap-1.5 transition-[right] duration-300",
+          overview && "hidden"
+        )}
+      >
         {viewControl}
         <div className={cn(pill, "flex-col")}>
         <IconButton

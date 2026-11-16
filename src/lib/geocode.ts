@@ -50,6 +50,49 @@ const STATE_CODES: Record<string, string> = {
   "West Virginia": "WV", Wisconsin: "WI", Wyoming: "WY",
 }
 
+function toLocation(f: PhotonFeature): Location {
+  const p = f.properties
+  const address = [p.housenumber, p.street].filter(Boolean).join(" ")
+  // "NY", as in "Richmond, VA". An unknown name stays as it is.
+  const state = p.state ? (STATE_CODES[p.state] ?? p.state) : undefined
+  const title = p.name ?? (address || p.city || p.postcode || "Unnamed place")
+  const detail = [p.name ? address : "", p.city !== title ? p.city : "", state, p.postcode]
+    .filter(Boolean)
+    .join(", ")
+  // A result that is itself a city has no "city" field: its name is the city.
+  const isArea = ["city", "locality", "district", "county"].includes(p.type ?? "")
+  const cityName = p.type === "state" ? undefined : (p.city ?? (isArea ? p.name : p.county) ?? p.name)
+  const center = f.geometry.coordinates
+  return {
+    id: `place-${center[1].toFixed(5)},${center[0].toFixed(5)}`,
+    label: title,
+    detail,
+    city: cityName ? [cityName, state].filter(Boolean).join(", ") : undefined,
+    center,
+    zips: zipsAround(p.postcode, center),
+  }
+}
+
+/** True inside the rough box around the contiguous United States. */
+export function inUnitedStates([lng, lat]: [number, number]) {
+  const [west, south, east, north] = US_BOX.split(",").map(Number)
+  return lng >= west && lng <= east && lat >= south && lat <= north
+}
+
+/**
+ * The place at a point, for "Use my current location": the nearest address the search service
+ * knows, at the user's own position. Without an answer, the place is just "Your location".
+ */
+export async function placeAt(center: [number, number]): Promise<Location> {
+  const near = await fetch(`${ENDPOINT.replace("/api/", "/reverse")}?lon=${center[0]}&lat=${center[1]}&lang=en`)
+    .then((r) => (r.ok ? (r.json() as Promise<{ features: PhotonFeature[] }>) : null))
+    .then((data) => data?.features.find((f) => f.properties.countrycode === "US"))
+    .catch(() => undefined)
+  const id = `place-${center[1].toFixed(5)},${center[0].toFixed(5)}`
+  if (near) return { ...toLocation(near), id, center }
+  return { id, label: "Your location", center, zips: zipsAround(undefined, center) }
+}
+
 export async function searchPlaces(query: string, signal: AbortSignal): Promise<Location[]> {
   const url = `${ENDPOINT}?q=${encodeURIComponent(query)}&limit=8&lang=en&bbox=${US_BOX}`
   const response = await fetch(url, { signal })
@@ -58,28 +101,7 @@ export async function searchPlaces(query: string, signal: AbortSignal): Promise<
   const seen = new Set<string>()
   return data.features
     .filter((f) => f.properties.countrycode === "US")
-    .map((f) => {
-      const p = f.properties
-      const address = [p.housenumber, p.street].filter(Boolean).join(" ")
-      // "NY", as in "Richmond, VA". An unknown name stays as it is.
-      const state = p.state ? (STATE_CODES[p.state] ?? p.state) : undefined
-      const title = p.name ?? (address || p.city || p.postcode || "Unnamed place")
-      const detail = [p.name ? address : "", p.city !== title ? p.city : "", state, p.postcode]
-        .filter(Boolean)
-        .join(", ")
-      // A result that is itself a city has no "city" field: its name is the city.
-      const isArea = ["city", "locality", "district", "county"].includes(p.type ?? "")
-      const cityName = p.type === "state" ? undefined : (p.city ?? (isArea ? p.name : p.county) ?? p.name)
-      const center = f.geometry.coordinates
-      return {
-        id: `place-${center[1].toFixed(5)},${center[0].toFixed(5)}`,
-        label: title,
-        detail,
-        city: cityName ? [cityName, state].filter(Boolean).join(", ") : undefined,
-        center,
-        zips: zipsAround(p.postcode, center),
-      }
-    })
+    .map(toLocation)
     .filter((place) => {
       const key = `${place.label}|${place.detail}`
       if (seen.has(key)) return false

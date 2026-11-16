@@ -25,11 +25,15 @@ Then open the address the terminal prints (usually http://localhost:5173).
 - **Prototype state** (bottom left): jump between an empty campaign, one wave, three waves, a
   repeat campaign (the same routes mailed twice) and a campaign that still needs fixing.
 - **Address or place**: search a real address, business, city or ZIP code. The map moves there and
-  loads routes within the chosen radius.
+  loads routes within the chosen radius. A new campaign starts with no place: the map shows the US
+  and asks "Where do you want to mail?", with "Use my current location" (US locations only).
 - **Add routes to**: choose a wave, or "All waves", then click routes on the map. The Area tool
   adds every route under the circle.
 - **Route suggestions**: choose an audience, click "Suggest routes", then add the suggested routes
   to a wave.
+- **Map / Table**: the Table view lists every route of one ZIP code (the searched place's, or a ZIP
+  around it), with residences and cost, and a fit score once audience filters are applied. Tick a
+  route to add it to the wave in "Add routes to".
 - **Mailing schedule**: set a date for each wave, see its price, and open a wave to see its routes.
 
 ## What is real and what is not

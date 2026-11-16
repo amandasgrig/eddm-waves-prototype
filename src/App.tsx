@@ -2,6 +2,9 @@ import * as React from "react"
 import { addDays } from "date-fns"
 import { toast } from "sonner"
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   BarChart3,
   CalendarDays,
   Check,
@@ -14,18 +17,19 @@ import {
   Circle,
   Home,
   LayoutGrid,
+  LoaderCircle,
+  LocateFixed,
   Mail,
   Expand,
-  Minus,
   MoreHorizontal,
   Plus,
   Search,
   Settings,
   Sparkles,
   X,
+  Map as MapIcon,
   MapPin,
-  Merge,
-  Split,
+  Table2,
   Trash2,
   Users,
   Workflow,
@@ -34,8 +38,13 @@ import { cn } from "cn"
 
 import { DatePicker } from "@/components/date-picker"
 import { IconButton } from "@/components/icon-button"
-import { MAP_PILL, RouteMap, type MapTools } from "@/components/route-map"
-import { searchPlaces } from "@/lib/geocode"
+import {
+  MAP_PILL,
+  PANEL_WIDTH,
+  RouteMap,
+  type MapTools,
+} from "@/components/route-map"
+import { inUnitedStates, placeAt, searchPlaces } from "@/lib/geocode"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -48,6 +57,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
   CardAction,
@@ -65,7 +75,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -112,6 +121,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   Tooltip,
   TooltipContent,
@@ -120,7 +130,6 @@ import {
 } from "@/components/ui/tooltip"
 import {
   AUDIENCE,
-  LOCATIONS,
   LOCATION_BY_ID,
   MAX_WAVES,
   MIN_DATE,
@@ -130,6 +139,7 @@ import {
   addLocation,
   buildWaveViews,
   countFilters,
+  fitPercent,
   suggestRoutes,
   SUGGEST_PAGE,
   fmtDate,
@@ -138,8 +148,6 @@ import {
   newWaveId,
   ROUTE_BY_ID,
   nextWeekday,
-  pricePerPiece,
-  quote,
   scheduleDates,
   splitRoutes,
   type Assignment,
@@ -162,6 +170,13 @@ const ShowErrors = React.createContext(false)
 
 /** Value of the wave picker when a click on a route applies to every wave. */
 const ALL_WAVES = "all"
+/** Before the first search there is no place: we do not know where the client mails. */
+const NO_PLACE: Location = {
+  id: "",
+  label: "",
+  center: [-98.6, 39.8],
+  zips: [],
+}
 
 const SPRING_START = nextWeekday(new Date(2027, 2, 1))
 const firstDate = SPRING_START > MIN_DATE ? SPRING_START : MIN_DATE
@@ -246,7 +261,6 @@ export function App() {
   const [mapOpen, setMapOpen] = React.useState(false)
   /** The route the user asked to see on the map. */
   const [focus, setFocus] = React.useState<{ id: string; key: number }>()
-  const [splitOpen, setSplitOpen] = React.useState(false)
   const [activeWave, setActiveWave] = React.useState<string | null>(null)
   const [filters, setFilters] = React.useState<AudienceFilters>({})
   /** The filters the current suggestions come from. Null until the user asks for suggestions. */
@@ -262,8 +276,36 @@ export function App() {
   /** Id of the wave the user asked to remove, while the confirmation is open. */
   const [removing, setRemoving] = React.useState<string | null>(null)
   /** The location the map shows. Routes selected in other locations stay in the campaign. */
-  const [locationId, setLocationId] = React.useState("richmond")
-  const location = LOCATION_BY_ID[locationId]
+  const [locationId, setLocationId] = React.useState<string | null>(null)
+  const location = locationId ? LOCATION_BY_ID[locationId] : NO_PLACE
+  /** True while "Use my current location" waits for the browser and the place search. */
+  const [locating, setLocating] = React.useState(false)
+  const locate = () => {
+    const fail = (message: string) => {
+      setLocating(false)
+      toast(message)
+    }
+    if (!navigator.geolocation)
+      return fail(
+        "Your browser can't share your location. Search an address instead."
+      )
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      async ({ coords }) => {
+        const center: [number, number] = [coords.longitude, coords.latitude]
+        // EDDM is a USPS service: a client elsewhere has to search a US address.
+        if (!inUnitedStates(center))
+          return fail(
+            "You're outside the US. Search a US address, a city or a ZIP code."
+          )
+        const place = await placeAt(center)
+        setLocationId(addLocation(place).id)
+        setLocating(false)
+      },
+      () => fail("We couldn't get your location. Search an address instead."),
+      { timeout: 10000 }
+    )
+  }
   /** Routes load up to this many miles from the location. */
   const [radius, setRadius] = React.useState(RADIUS.initial)
   // The map shows the routes inside the radius, and every selected route, so a selection never disappears.
@@ -304,7 +346,6 @@ export function App() {
   /** Pieces printed: a route in three waves counts three times. */
   const pieces = views.reduce((s, v) => s + v.residences, 0)
   const total = views.reduce((s, v) => s + v.subtotal, 0)
-  const singleTotal = residences * pricePerPiece(residences)
   const issueCount = views.reduce((s, v) => s + v.issues.length, 0)
   const ready = routeCount > 0 && issueCount === 0
   const [showErrors, setShowErrors] = React.useState(false)
@@ -448,6 +489,17 @@ export function App() {
         ),
       }))
     },
+    /** Removes routes from the selected wave, or from every wave when "All waves" is selected. One undo step. */
+    removeRoutes(routes: Route[]) {
+      setState((s) => ({
+        ...s,
+        assignment: routes.reduce(
+          (a, r) =>
+            targetIds.reduce((b, id) => withRoute(b, r.id, id, false), a),
+          s.assignment
+        ),
+      }))
+    },
     /** Removes a route from the selected wave, or from every wave when "All waves" is selected. */
     removeFromActive(routeId: string) {
       setState((s) => ({
@@ -517,33 +569,6 @@ export function App() {
         ),
       }))
     },
-    applySplit(count: number, first: Date, everyWeeks: number) {
-      setState((s) =>
-        makeState(
-          splitRoutes(Object.keys(s.assignment), count),
-          scheduleDates(first, count, everyWeeks)
-        )
-      )
-      offerUndo(`Routes distributed into ${count} waves.`)
-    },
-    sendOnOneDate() {
-      setState((s) =>
-        makeState([Object.keys(s.assignment)], [views[0].wave.date])
-      )
-      offerUndo(`${views.length} waves merged into one.`)
-    },
-  }
-
-  /**
-   * These two actions replace every wave at once, so a message offers to take them back.
-   * Undo restores the schedule as it was before the action, also if the user changed something after.
-   */
-  function offerUndo(message: string) {
-    const before = state
-    toast(message, {
-      duration: 10000,
-      action: { label: "Undo", onClick: () => setState(() => before) },
-    })
   }
 
   const audience: AudienceProps = {
@@ -654,6 +679,9 @@ export function App() {
                     audience={audience}
                     location={location}
                     onLocationChange={setLocationId}
+                    hasPlace={locationId !== null}
+                    onLocate={locate}
+                    locating={locating}
                     views={views}
                     activeId={activeKey}
                     onActiveChange={setActiveWave}
@@ -664,13 +692,18 @@ export function App() {
                     pieces={pieces}
                     onToggle={actions.toggleRoute}
                     onOpenMap={() => setMapOpen(true)}
+                    fitFilters={
+                      suggested && countFilters(suggested) > 0
+                        ? suggested
+                        : null
+                    }
+                    onAddMany={actions.addRoutes}
+                    onRemoveMany={actions.removeRoutes}
                   />
 
                   <ScheduleCard
                     views={views}
-                    residences={residences}
                     actions={actions}
-                    onSplit={() => setSplitOpen(true)}
                     onOpenMap={(waveId) => {
                       setActiveWave(waveId)
                       setMapOpen(true)
@@ -680,7 +713,13 @@ export function App() {
 
                 <SummaryCard
                   name={name}
-                  locations={usedLocations.length ? usedLocations : [location]}
+                  locations={
+                    usedLocations.length
+                      ? usedLocations
+                      : locationId
+                        ? [location]
+                        : []
+                  }
                   views={views}
                   routeCount={routeCount}
                   residences={residences}
@@ -703,6 +742,9 @@ export function App() {
             audience={audience}
             location={location}
             onLocationChange={setLocationId}
+            hasPlace={locationId !== null}
+            onLocate={locate}
+            locating={locating}
             activeId={activeKey}
             onActiveChange={setActiveWave}
             onAddWave={actions.addWave}
@@ -710,17 +752,6 @@ export function App() {
             onToggle={actions.toggleRoute}
             onRemove={actions.removeFromActive}
             onShow={actions.showOnMap}
-          />
-          <SplitDialog
-            key={String(splitOpen)}
-            open={splitOpen}
-            onOpenChange={setSplitOpen}
-            routeIds={Object.keys(state.assignment)}
-            residences={residences}
-            initialCount={multi ? views.length : 3}
-            initialDate={views[0].wave.date ?? firstDate}
-            singleTotal={singleTotal}
-            onApply={actions.applySplit}
           />
 
           <RemoveWaveDialog
@@ -747,6 +778,7 @@ export function App() {
                   aria-pressed={preset === key}
                   onClick={() => {
                     setPreset(key)
+                    setLocationId(key === "empty" ? null : "richmond")
                     resetState(PRESETS[key].build())
                     setShowErrors(false)
                   }}
@@ -812,8 +844,6 @@ type Actions = {
   setDate: (waveId: string, date: Date) => void
   addWave: () => void
   removeWave: (waveId: string) => void
-  applySplit: (count: number, first: Date, everyWeeks: number) => void
-  sendOnOneDate: () => void
 }
 
 /* ------------------------------------------------------------------ shell */
@@ -1540,7 +1570,7 @@ function LocationSearch({
   React.useEffect(() => setText(location.label), [location])
 
   const q = text.trim()
-  // Before the user types something new, the list shows a few suggested places.
+  // The list opens once the user types something new: we do not know where they mail.
   const searching = q.length >= 3 && q !== location.label
   React.useEffect(() => {
     if (!searching) {
@@ -1567,7 +1597,7 @@ function LocationSearch({
     }
   }, [q, searching])
 
-  const matches = searching ? results : LOCATIONS
+  const matches = searching ? results : []
   const pick = (place: Location) => {
     onChange(addLocation(place).id)
     setText(place.label)
@@ -1632,25 +1662,17 @@ function LocationSearch({
           }}
         />
       </InputGroup>
-      {open && (
+      {open && searching && (
         <ul
           id={listId}
           role="listbox"
           className="absolute top-full z-20 mt-1 flex w-full flex-col rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10"
         >
-          {!searching && (
-            <li
-              role="presentation"
-              className="px-2 pt-1 pb-0.5 text-xs text-muted-foreground"
-            >
-              Suggested
-            </li>
-          )}
-          {searching && status === "error" ? (
+          {status === "error" ? (
             <li className="px-2 py-1.5 text-muted-foreground">
               Search is not available. Check your connection and try again.
             </li>
-          ) : searching && status === "loading" && results.length === 0 ? (
+          ) : status === "loading" && results.length === 0 ? (
             <li className="px-2 py-1.5 text-muted-foreground">Searching…</li>
           ) : matches.length === 0 ? (
             <li className="px-2 py-1.5 text-muted-foreground">
@@ -1696,6 +1718,36 @@ function LocationSearch({
   )
 }
 
+/** Shown on the map until a place is chosen, as in Figma "Targeting · Empty state". */
+function PlacePrompt({
+  onLocate,
+  locating,
+}: {
+  onLocate: () => void
+  locating: boolean
+}) {
+  return (
+    <div className="flex w-full max-w-sm flex-col items-center gap-4 rounded-xl bg-background p-6 text-center shadow-lg ring-1 ring-foreground/10">
+      <span className="flex size-12 items-center justify-center rounded-full bg-muted">
+        <MapPin className="size-6" />
+      </span>
+      <div className="flex flex-col gap-1.5">
+        <p className="font-heading text-base font-semibold">
+          Where do you want to mail?
+        </p>
+        <p className="text-muted-foreground">
+          Search an address, a city or a ZIP code to see the carrier routes
+          around it.
+        </p>
+      </div>
+      <Button variant="outline" onClick={onLocate} disabled={locating}>
+        {locating ? <LoaderCircle className="animate-spin" /> : <LocateFixed />}
+        {locating ? "Finding your location…" : "Use my current location"}
+      </Button>
+    </div>
+  )
+}
+
 function TargetingCard({
   colors,
   hint,
@@ -1703,6 +1755,9 @@ function TargetingCard({
   audience,
   location,
   onLocationChange,
+  hasPlace,
+  onLocate,
+  locating,
   views,
   activeId,
   onActiveChange,
@@ -1713,6 +1768,9 @@ function TargetingCard({
   pieces,
   onToggle,
   onOpenMap,
+  fitFilters,
+  onAddMany,
+  onRemoveMany,
 }: {
   colors: Record<string, string[]>
   hint: (route: Route) => React.ReactNode
@@ -1720,6 +1778,10 @@ function TargetingCard({
   audience: AudienceProps
   location: Location
   onLocationChange: (locationId: string) => void
+  /** False until the user searched a place or shared their location */
+  hasPlace: boolean
+  onLocate: () => void
+  locating: boolean
   views: WaveView[]
   activeId: string
   onActiveChange: (id: string) => void
@@ -1730,9 +1792,34 @@ function TargetingCard({
   pieces: number
   onToggle: (route: Route) => void
   onOpenMap: () => void
+  /** The audience filters the current suggestions come from. Null when the user has not applied any. */
+  fitFilters: AudienceFilters | null
+  onAddMany: (routes: Route[]) => void
+  onRemoveMany: (routes: Route[]) => void
 }) {
   const [filtersOpen, setFiltersOpen] = React.useState(false)
+  const [view, setView] = React.useState<"map" | "table">("map")
   const showErrors = React.useContext(ShowErrors)
+  const panel = filtersOpen && (
+    <AudiencePanel audience={audience} onClose={() => setFiltersOpen(false)} />
+  )
+  const suggestions = (
+    <AudienceButton
+      side="right"
+      open={filtersOpen}
+      onOpenChange={setFiltersOpen}
+    />
+  )
+  const waveSelect = (className?: string) => (
+    <WaveSelect
+      views={views}
+      activeId={activeId}
+      onActiveChange={onActiveChange}
+      onAddWave={onAddWave}
+      onRemoveWave={onRemoveWave}
+      className={className}
+    />
+  )
   return (
     <Card className="overflow-visible">
       <CardHeader>
@@ -1741,6 +1828,24 @@ function TargetingCard({
           Choose the carrier routes to mail. Every residence on a selected route
           gets a piece.
         </CardDescription>
+        <CardAction>
+          <ToggleGroup
+            variant="outline"
+            size="sm"
+            aria-label="View routes as"
+            value={[view]}
+            onValueChange={([next]) => {
+              if (next === "map" || next === "table") setView(next)
+            }}
+          >
+            <ToggleGroupItem value="map" aria-label="View as map">
+              <MapIcon /> Map
+            </ToggleGroupItem>
+            <ToggleGroupItem value="table" aria-label="View as table">
+              <Table2 /> Table
+            </ToggleGroupItem>
+          </ToggleGroup>
+        </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex flex-col gap-2">
@@ -1752,51 +1857,59 @@ function TargetingCard({
             trailing={<RadiusSelect tools={tools} />}
           />
         </div>
-        <RouteMap
-          colors={colors}
-          hint={hint}
-          onToggle={onToggle}
-          highlight={audience.ids}
-          spotlight={audience.spotId}
-          scrollZoom={false}
-          {...tools}
-          className="h-96"
-          sidePanel={
-            filtersOpen && (
-              <AudiencePanel
-                audience={audience}
-                onClose={() => setFiltersOpen(false)}
-              />
-            )
-          }
-          viewControl={
-            <div className={MAP_PILL}>
-              <IconButton
-                variant="ghost"
-                size="icon-sm"
-                label="Open map"
-                side="left"
-                onClick={onOpenMap}
-              >
-                <Expand />
-              </IconButton>
-            </div>
-          }
-        >
-          <WaveSelect
+        {view === "table" && !hasPlace ? (
+          <div className="flex h-96 items-center justify-center rounded-lg border bg-muted/40 p-4">
+            <PlacePrompt onLocate={onLocate} locating={locating} />
+          </div>
+        ) : view === "map" ? (
+          <RouteMap
+            colors={colors}
+            hint={hint}
+            onToggle={onToggle}
+            highlight={audience.ids}
+            spotlight={audience.spotId}
+            scrollZoom={false}
+            {...tools}
+            className="h-96"
+            sidePanel={panel}
+            overlay={
+              !hasPlace && (
+                <PlacePrompt onLocate={onLocate} locating={locating} />
+              )
+            }
+            viewControl={
+              <div className={MAP_PILL}>
+                <IconButton
+                  variant="ghost"
+                  size="icon-sm"
+                  label="Open map"
+                  side="left"
+                  onClick={onOpenMap}
+                >
+                  <Expand />
+                </IconButton>
+              </div>
+            }
+          >
+            {hasPlace && waveSelect("absolute top-3 left-3")}
+            {hasPlace && suggestions}
+          </RouteMap>
+        ) : (
+          <RouteTable
+            location={location}
+            radius={tools.radius}
             views={views}
-            activeId={activeId}
-            onActiveChange={onActiveChange}
-            onAddWave={onAddWave}
-            onRemoveWave={onRemoveWave}
-            className="absolute top-3 left-3"
-          />
-          <AudienceButton
-            side="right"
-            open={filtersOpen}
-            onOpenChange={setFiltersOpen}
-          />
-        </RouteMap>
+            audience={audience}
+            fitFilters={fitFilters}
+            onToggle={onToggle}
+            onAddMany={onAddMany}
+            onRemoveMany={onRemoveMany}
+            toolbar={waveSelect()}
+            sidePanel={panel}
+          >
+            {suggestions}
+          </RouteTable>
+        )}
         <div className="flex items-center justify-between">
           {routeCount === 0 ? (
             <span
@@ -1806,7 +1919,11 @@ function TargetingCard({
               )}
             >
               {showErrors && <CircleAlert className="size-3.5 shrink-0" />}
-              No routes selected. Click a route on the map to add it to Wave 1.
+              {!hasPlace
+                ? "No routes selected. Search a place to see its routes."
+                : view === "map"
+                  ? "No routes selected. Click a route on the map to add it to Wave 1."
+                  : "No routes selected. Tick a route in the table to add it to Wave 1."}
             </span>
           ) : (
             <span>
@@ -1836,6 +1953,292 @@ function TargetingCard({
   )
 }
 
+/** The searched place's own ZIP code: the middle of its ZIP grid. */
+const placeZip = (location: Location) => location.zips[1][1]
+
+type SortKey = "route" | "residences" | "fit" | "cost"
+
+/**
+ * The Table view of the Targeting card, as on the USPS EDDM tool: every route of one ZIP code at a
+ * time. It opens on the ZIP of the searched place; the user can switch to another ZIP that has
+ * routes within the radius. A ticked row is in the wave chosen in "Add routes to", with the same
+ * rule as a click on the map.
+ */
+function RouteTable({
+  location,
+  radius,
+  views,
+  audience,
+  fitFilters,
+  onToggle,
+  onAddMany,
+  onRemoveMany,
+  toolbar,
+  sidePanel,
+  children,
+}: {
+  location: Location
+  /** Routes load up to this many miles from the place; the ZIP list follows it. */
+  radius: number
+  views: WaveView[]
+  audience: AudienceProps
+  fitFilters: AudienceFilters | null
+  onToggle: (route: Route) => void
+  onAddMany: (routes: Route[]) => void
+  onRemoveMany: (routes: Route[]) => void
+  /** Controls on the left of the toolbar (the "Add routes to" picker) */
+  toolbar: React.ReactNode
+  /** The Route suggestions panel, docked on the right as on the map */
+  sidePanel?: React.ReactNode
+  /** Floats in the top right corner (the Route suggestions button) */
+  children?: React.ReactNode
+}) {
+  // A new search shows the ZIP of the new place.
+  const [picked, setPicked] = React.useState({
+    place: location.id,
+    zip: placeZip(location),
+  })
+  // The place's own ZIP first, then the other ZIPs that have routes within the radius.
+  const own = placeZip(location)
+  const around = ROUTES.filter(
+    (r) => r.location === location.id && r.reach <= radius && r.zip !== own
+  ).map((r) => r.zip)
+  const zips = [own, ...[...new Set(around)].sort()]
+  // A smaller radius can drop the picked ZIP from the list; the table goes back to the place's own.
+  const zip =
+    picked.place === location.id && zips.includes(picked.zip) ? picked.zip : own
+  // No sort chosen: best fit first when filters apply, else by route number.
+  const [sort, setSort] = React.useState<{
+    key: SortKey
+    desc: boolean
+  } | null>(null)
+  const active =
+    sort ??
+    (fitFilters ? { key: "fit", desc: true } : { key: "route", desc: false })
+  const fit = (r: Route) => (fitFilters ? fitPercent(r, fitFilters) : 0)
+
+  // Cost sorts like residences: every row has the same price per piece.
+  const value = (r: Route) =>
+    active.key === "route"
+      ? r.code
+      : active.key === "fit"
+        ? fit(r)
+        : r.residences
+  const rows = ROUTES.filter(
+    (r) => r.location === location.id && r.zip === zip
+  ).sort((a, b) => {
+    const va = value(a)
+    const vb = value(b)
+    const order = va < vb ? -1 : va > vb ? 1 : a.code.localeCompare(b.code)
+    return active.desc ? -order : order
+  })
+
+  const inTarget = rows.filter((r) => audience.isAdded(r))
+  const allIn = rows.length > 0 && inTarget.length === rows.length
+  // Some routes of the ZIP are in the wave: the top checkbox shows a dash, and a click adds the rest.
+  const someIn = inTarget.length > 0 && !allIn
+  const zipResidences = rows.reduce((s, r) => s + r.residences, 0)
+  const panelOpen = Boolean(sidePanel)
+
+  const header = (
+    key: SortKey,
+    label: string,
+    align: "left" | "right" = "right"
+  ) => {
+    const on = active.key === key
+    const Icon = on ? (active.desc ? ArrowDown : ArrowUp) : ArrowUpDown
+    return (
+      <TableHead
+        className={align === "right" ? "text-right" : undefined}
+        aria-sort={on ? (active.desc ? "descending" : "ascending") : "none"}
+      >
+        <Button
+          variant="ghost"
+          size="xs"
+          className={cn("font-medium", align === "right" ? "-mr-2" : "-ml-2")}
+          onClick={() =>
+            setSort({
+              key,
+              desc: on
+                ? !active.desc
+                : key === "fit" || key === "residences" || key === "cost",
+            })
+          }
+        >
+          {label}
+          <Icon className={on ? undefined : "text-muted-foreground"} />
+        </Button>
+      </TableHead>
+    )
+  }
+
+  return (
+    <div
+      className="relative flex h-[30rem] flex-col overflow-hidden rounded-lg border bg-background"
+      role="group"
+      aria-label="Carrier routes table"
+    >
+      <div
+        className="flex items-center gap-1.5 border-b bg-muted/40 p-3 transition-[padding] duration-300"
+        style={{ paddingRight: panelOpen ? PANEL_WIDTH + 12 : undefined }}
+      >
+        {toolbar}
+        <div className={MAP_PILL}>
+          <span className="px-1.5 text-xs whitespace-nowrap text-muted-foreground">
+            ZIP code
+          </span>
+          <Select
+            items={zips.map((z) => ({ value: z, label: z }))}
+            value={zip}
+            onValueChange={(v) =>
+              v && setPicked({ place: location.id, zip: v })
+            }
+          >
+            <SelectTrigger
+              size="sm"
+              aria-label="ZIP code"
+              className="min-w-24 font-normal tabular-nums"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent
+              align="start"
+              alignItemWithTrigger={false}
+              className="min-w-56"
+            >
+              {zips.map((z) => (
+                <SelectItem key={z} value={z} className="tabular-nums">
+                  {z}
+                  {z === own && (
+                    <span className="text-muted-foreground">
+                      · {location.label}
+                    </span>
+                  )}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+
+      <div
+        className="min-h-0 flex-1 overflow-y-auto transition-[padding] duration-300 [&_[data-slot=table-container]]:overflow-visible"
+        style={{ paddingRight: panelOpen ? PANEL_WIDTH : undefined }}
+      >
+        <Table>
+          <TableHeader className="sticky top-0 z-[1] bg-background shadow-[inset_0_-1px_0_var(--border)]">
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-10 pl-3">
+                <Checkbox
+                  checked={allIn}
+                  indeterminate={someIn}
+                  disabled={rows.length === 0}
+                  aria-label={
+                    allIn
+                      ? `Remove every route of ZIP ${zip} from ${audience.activeLabel}`
+                      : someIn
+                        ? `Add the other routes of ZIP ${zip} to ${audience.activeLabel}`
+                        : `Add every route of ZIP ${zip} to ${audience.activeLabel}`
+                  }
+                  onCheckedChange={() =>
+                    allIn
+                      ? onRemoveMany(rows)
+                      : onAddMany(rows.filter((r) => !audience.isAdded(r)))
+                  }
+                />
+              </TableHead>
+              {header("route", "Route", "left")}
+              {header("residences", "Residences")}
+              {fitFilters && header("fit", "Fit")}
+              {header("cost", "Cost", "right")}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={fitFilters ? 5 : 4}
+                  className="py-10 text-center text-muted-foreground"
+                >
+                  No routes in this ZIP code.
+                </TableCell>
+              </TableRow>
+            ) : (
+              rows.map((r) => {
+                const added = audience.isAdded(r)
+                return (
+                  <TableRow
+                    key={r.id}
+                    data-state={added ? "selected" : undefined}
+                    className={cn(
+                      "tabular-nums",
+                      audience.spotId === r.id && "bg-muted/50"
+                    )}
+                  >
+                    <TableCell className="pl-3">
+                      <Checkbox
+                        checked={added}
+                        aria-label={
+                          added
+                            ? `Remove ${r.zip} ${r.code} from ${audience.activeLabel}`
+                            : `Add ${r.zip} ${r.code} to ${audience.activeLabel}`
+                        }
+                        onCheckedChange={() => onToggle(r)}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <span className="flex items-center gap-2">
+                        <span className="font-medium">{r.id}</span>
+                        <RouteWaves route={r} views={views} />
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {fmtNum(r.residences)}
+                    </TableCell>
+                    {fitFilters && (
+                      <TableCell className="text-right">
+                        <FitBadge percent={fit(r)} />
+                      </TableCell>
+                    )}
+                    <TableCell className="pr-3 text-right">
+                      {fmtMoney(r.residences * audience.rate)}
+                    </TableCell>
+                  </TableRow>
+                )
+              })
+            )}
+          </TableBody>
+        </Table>
+      </div>
+
+      <div
+        className="flex items-center justify-between gap-4 border-t bg-muted/40 px-3 py-2 text-xs text-muted-foreground tabular-nums transition-[padding] duration-300"
+        style={{ paddingRight: panelOpen ? PANEL_WIDTH + 12 : undefined }}
+      >
+        <span>
+          {fmtNum(rows.length)} {rows.length === 1 ? "route" : "routes"} in ZIP{" "}
+          {zip}
+          <span className="mx-1.5">·</span>
+          {fmtNum(zipResidences)} residences
+        </span>
+        <span>
+          {fmtNum(inTarget.length)} in {audience.activeLabel}
+        </span>
+      </div>
+
+      {children}
+      {sidePanel && (
+        <div
+          className="absolute inset-y-0 right-0 z-10 flex animate-in flex-col border-l bg-background shadow-lg duration-300 slide-in-from-right"
+          style={{ width: PANEL_WIDTH }}
+        >
+          {sidePanel}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MapDialog({
   open,
   onOpenChange,
@@ -1846,6 +2249,9 @@ function MapDialog({
   audience,
   location,
   onLocationChange,
+  hasPlace,
+  onLocate,
+  locating,
   activeId,
   onActiveChange,
   onAddWave,
@@ -1863,6 +2269,9 @@ function MapDialog({
   audience: AudienceProps
   location: Location
   onLocationChange: (locationId: string) => void
+  hasPlace: boolean
+  onLocate: () => void
+  locating: boolean
   activeId: string
   onActiveChange: (id: string) => void
   onAddWave: () => void
@@ -2013,6 +2422,11 @@ function MapDialog({
                 />
               )
             }
+            overlay={
+              !hasPlace && (
+                <PlacePrompt onLocate={onLocate} locating={locating} />
+              )
+            }
           >
             <LocationSearch
               location={location}
@@ -2021,11 +2435,13 @@ function MapDialog({
               groupClassName="h-9 bg-background shadow-sm"
               trailing={<RadiusSelect tools={tools} />}
             />
-            <AudienceButton
-              side="right"
-              open={filtersOpen}
-              onOpenChange={setFiltersOpen}
-            />
+            {hasPlace && (
+              <AudienceButton
+                side="right"
+                open={filtersOpen}
+                onOpenChange={setFiltersOpen}
+              />
+            )}
           </RouteMap>
         </div>
       </DialogContent>
@@ -2125,20 +2541,13 @@ function WaveDots({ views }: { views: WaveView[] }) {
 
 function ScheduleCard({
   views,
-  residences,
   actions,
-  onSplit,
   onOpenMap,
 }: {
   views: WaveView[]
-  residences: number
   actions: Actions
-  onSplit: () => void
   onOpenMap: (waveId: string) => void
 }) {
-  const multi = views.length > 1
-  const canSplit = residences >= WAVE_MINIMUM * 2
-
   return (
     <Card>
       <CardHeader>
@@ -2147,29 +2556,6 @@ function ScheduleCard({
           Each wave is printed and mailed on its own date, and priced on its own
           size. Add a wave to mail routes on another date.
         </CardDescription>
-        <CardAction>
-          <DropdownMenu>
-            <IconButton
-              trigger={<DropdownMenuTrigger />}
-              variant="outline"
-              size="icon"
-              label="Schedule options"
-            >
-              <MoreHorizontal />
-            </IconButton>
-            <DropdownMenuContent align="end" className="w-60">
-              <DropdownMenuItem disabled={!canSplit} onClick={onSplit}>
-                <Split /> Distribute routes evenly…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={!multi}
-                onClick={actions.sendOnOneDate}
-              >
-                <Merge /> Merge into one wave
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </CardAction>
       </CardHeader>
 
       <CardContent className="flex flex-col gap-3">
@@ -2516,197 +2902,6 @@ function WaveRow({
   )
 }
 
-function SplitDialog({
-  open,
-  onOpenChange,
-  routeIds,
-  residences,
-  initialCount,
-  initialDate,
-  singleTotal,
-  onApply,
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  routeIds: string[]
-  residences: number
-  initialCount: number
-  initialDate: Date
-  singleTotal: number
-  onApply: (count: number, first: Date, everyWeeks: number) => void
-}) {
-  const maxCount = Math.max(
-    2,
-    Math.min(MAX_WAVES, Math.floor(residences / WAVE_MINIMUM), routeIds.length)
-  )
-  const [count, setCount] = React.useState(Math.min(initialCount, maxCount))
-  const [first, setFirst] = React.useState(initialDate)
-  const [weeks, setWeeks] = React.useState("1")
-
-  const groups = React.useMemo(
-    () => splitRoutes(routeIds, count),
-    [routeIds, count]
-  )
-  const rows = quote(groups)
-  const dates = scheduleDates(first, count, Number(weeks))
-  const total = rows.reduce((s, r) => s + r.subtotal, 0)
-  const belowMin = rows.some((r) => r.residences < WAVE_MINIMUM)
-  const cadences = [
-    { value: "1", label: "Every week" },
-    { value: "2", label: "Every 2 weeks" },
-    { value: "3", label: "Every 3 weeks" },
-    { value: "4", label: "Every 4 weeks" },
-  ]
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Distribute routes evenly</DialogTitle>
-          <DialogDescription>
-            This replaces your current waves. Each route goes into one wave.
-            Waves get a similar size and keep neighbouring routes together. You
-            can still change any route afterwards.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="grid grid-cols-[auto_1fr_1fr] gap-3">
-          <div className="flex flex-col gap-2">
-            <Label id="count-label">Waves</Label>
-            <div
-              className="flex items-center gap-1"
-              role="group"
-              aria-labelledby="count-label"
-            >
-              <IconButton
-                variant="outline"
-                size="icon"
-                label="Fewer waves"
-                disabled={count <= 2}
-                onClick={() => setCount(count - 1)}
-              >
-                <Minus />
-              </IconButton>
-              <span
-                className="w-7 text-center font-medium tabular-nums"
-                aria-live="polite"
-              >
-                {count}
-              </span>
-              <IconButton
-                variant="outline"
-                size="icon"
-                label="More waves"
-                disabled={count >= maxCount}
-                onClick={() => setCount(count + 1)}
-              >
-                <Plus />
-              </IconButton>
-            </div>
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="first-date">First mailing</Label>
-            <DatePicker
-              id="first-date"
-              value={first}
-              onChange={setFirst}
-              className="w-full"
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="cadence">Then</Label>
-            <Select
-              items={cadences}
-              value={weeks}
-              onValueChange={(v) => v && setWeeks(v)}
-            >
-              <SelectTrigger id="cadence" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {cadences.map((c) => (
-                  <SelectItem key={c.value} value={c.value}>
-                    {c.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div className="rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="pl-3">Wave</TableHead>
-                <TableHead>Mails on</TableHead>
-                <TableHead className="text-right">Residences</TableHead>
-                <TableHead className="pr-3 text-right">Subtotal</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r, i) => (
-                <TableRow key={i}>
-                  <TableCell className="pl-3 font-medium">
-                    Wave {i + 1}
-                  </TableCell>
-                  <TableCell className="tabular-nums">
-                    {fmtDate(dates[i], "EEE, MMM d")}
-                  </TableCell>
-                  <TableCell
-                    className={cn(
-                      "text-right tabular-nums",
-                      r.residences < WAVE_MINIMUM && "text-destructive"
-                    )}
-                  >
-                    {fmtNum(r.residences)}
-                  </TableCell>
-                  <TableCell className="pr-3 text-right tabular-nums">
-                    {fmtMoney(r.subtotal)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-
-        <div className="flex items-baseline justify-between">
-          <span className="text-muted-foreground">
-            {total - singleTotal > 0.005
-              ? `${fmtMoney(total - singleTotal)} more than mailing on one date`
-              : "Same price as mailing on one date"}
-          </span>
-          <span className="font-medium tabular-nums">
-            Total {fmtMoney(total)}
-          </span>
-        </div>
-        {belowMin && (
-          <p className="flex items-start gap-1.5 text-destructive">
-            <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
-            Each wave needs at least {fmtNum(WAVE_MINIMUM)} residences. Use
-            fewer waves or add routes.
-          </p>
-        )}
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            disabled={belowMin}
-            onClick={() => {
-              onApply(count, first, Number(weeks))
-              onOpenChange(false)
-            }}
-          >
-            Distribute into {count} waves
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 /* ---------------------------------------------------------------- summary */
 
 function SummaryCard({
@@ -2737,7 +2932,7 @@ function SummaryCard({
     ["Campaign name", name || pending],
     [
       locations.length > 1 ? "Locations" : "Location",
-      locations.map((l) => l.label).join(" · "),
+      locations.length ? locations.map((l) => l.label).join(" · ") : pending,
     ],
     ["Routes", routeCount ? fmtNum(routeCount) : pending],
     ["Residences", routeCount ? fmtNum(residences) : pending],
