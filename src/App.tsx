@@ -102,13 +102,6 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { DotOrb } from "@/components/dot-orb"
 import { Separator } from "@/components/ui/separator"
 import { Slider } from "@/components/ui/slider"
@@ -1897,7 +1890,6 @@ function TargetingCard({
         ) : (
           <RouteTable
             location={location}
-            radius={tools.radius}
             views={views}
             audience={audience}
             fitFilters={fitFilters}
@@ -1959,14 +1951,12 @@ const placeZip = (location: Location) => location.zips[1][1]
 type SortKey = "route" | "residences" | "fit" | "cost"
 
 /**
- * The Table view of the Targeting card, as on the USPS EDDM tool: every route of one ZIP code at a
- * time. It opens on the ZIP of the searched place; the user can switch to another ZIP that has
- * routes within the radius. A ticked row is in the wave chosen in "Add routes to", with the same
- * rule as a click on the map.
+ * The Table view of the Targeting card, as on the USPS EDDM tool: every route of the searched
+ * place's ZIP code. A ticked row is in the wave chosen in "Add routes to", with the same rule as a
+ * click on the map.
  */
 function RouteTable({
   location,
-  radius,
   views,
   audience,
   fitFilters,
@@ -1978,8 +1968,6 @@ function RouteTable({
   children,
 }: {
   location: Location
-  /** Routes load up to this many miles from the place; the ZIP list follows it. */
-  radius: number
   views: WaveView[]
   audience: AudienceProps
   fitFilters: AudienceFilters | null
@@ -1993,20 +1981,7 @@ function RouteTable({
   /** Floats in the top right corner (the Route suggestions button) */
   children?: React.ReactNode
 }) {
-  // A new search shows the ZIP of the new place.
-  const [picked, setPicked] = React.useState({
-    place: location.id,
-    zip: placeZip(location),
-  })
-  // The place's own ZIP first, then the other ZIPs that have routes within the radius.
-  const own = placeZip(location)
-  const around = ROUTES.filter(
-    (r) => r.location === location.id && r.reach <= radius && r.zip !== own
-  ).map((r) => r.zip)
-  const zips = [own, ...[...new Set(around)].sort()]
-  // A smaller radius can drop the picked ZIP from the list; the table goes back to the place's own.
-  const zip =
-    picked.place === location.id && zips.includes(picked.zip) ? picked.zip : own
+  const zip = placeZip(location)
   // No sort chosen: best fit first when filters apply, else by route number.
   const [sort, setSort] = React.useState<{
     key: SortKey
@@ -2083,42 +2058,6 @@ function RouteTable({
         style={{ paddingRight: panelOpen ? PANEL_WIDTH + 12 : undefined }}
       >
         {toolbar}
-        <div className={MAP_PILL}>
-          <span className="px-1.5 text-xs whitespace-nowrap text-muted-foreground">
-            ZIP code
-          </span>
-          <Select
-            items={zips.map((z) => ({ value: z, label: z }))}
-            value={zip}
-            onValueChange={(v) =>
-              v && setPicked({ place: location.id, zip: v })
-            }
-          >
-            <SelectTrigger
-              size="sm"
-              aria-label="ZIP code"
-              className="min-w-24 font-normal tabular-nums"
-            >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent
-              align="start"
-              alignItemWithTrigger={false}
-              className="min-w-56"
-            >
-              {zips.map((z) => (
-                <SelectItem key={z} value={z} className="tabular-nums">
-                  {z}
-                  {z === own && (
-                    <span className="text-muted-foreground">
-                      · {location.label}
-                    </span>
-                  )}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
       </div>
 
       <div

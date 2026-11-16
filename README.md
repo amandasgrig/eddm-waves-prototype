@@ -31,8 +31,8 @@ Then open the address the terminal prints (usually http://localhost:5173).
   adds every route under the circle.
 - **Route suggestions**: choose an audience, click "Suggest routes", then add the suggested routes
   to a wave.
-- **Map / Table**: the Table view lists every route of one ZIP code (the searched place's, or a ZIP
-  around it), with residences and cost, and a fit score once audience filters are applied. Tick a
+- **Map / Table**: the Table view lists every route of the searched place's ZIP code, with
+  residences and cost, and a fit score once audience filters are applied. Tick a
   route to add it to the wave in "Add routes to".
 - **Mailing schedule**: set a date for each wave, see its price, and open a wave to see its routes.
 
