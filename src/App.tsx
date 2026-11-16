@@ -2035,6 +2035,8 @@ function RouteTable({
 
   const inTarget = rows.filter((r) => audience.isAdded(r))
   const allIn = rows.length > 0 && inTarget.length === rows.length
+  // Some routes of the ZIP are in the wave: the top checkbox shows a dash, and a click adds the rest.
+  const someIn = inTarget.length > 0 && !allIn
   const zipResidences = rows.reduce((s, r) => s + r.residences, 0)
   const panelOpen = Boolean(sidePanel)
 
@@ -2129,11 +2131,14 @@ function RouteTable({
               <TableHead className="w-10 pl-3">
                 <Checkbox
                   checked={allIn}
+                  indeterminate={someIn}
                   disabled={rows.length === 0}
                   aria-label={
                     allIn
                       ? `Remove every route of ZIP ${zip} from ${audience.activeLabel}`
-                      : `Add every route of ZIP ${zip} to ${audience.activeLabel}`
+                      : someIn
+                        ? `Add the other routes of ZIP ${zip} to ${audience.activeLabel}`
+                        : `Add every route of ZIP ${zip} to ${audience.activeLabel}`
                   }
                   onCheckedChange={() =>
                     allIn
