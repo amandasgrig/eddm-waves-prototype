@@ -586,6 +586,9 @@ export function App() {
     },
     spotId,
     onSpot: setSpotId,
+    onMapHover: (id) => setSpotId(id && fitIds.has(id) ? id : null),
+    fitBadge: (r) =>
+      fitIds.has(r.id) && <FitBadge percent={suggestion.percent[r.id]} />,
     routes: fit,
     more: Math.max(0, suggestion.ranked.length - shown),
     onMore: () => setShown((n) => n + SUGGEST_PAGE),
@@ -598,6 +601,7 @@ export function App() {
       targetIds.every((id) => state.assignment[r.id]?.includes(id)),
     toAdd: fitToAdd.length,
     activeLabel,
+    allWaves: allActive,
     onAdd: (r) => actions.addRoutes([r]),
     onRemove: (r) => actions.removeFromActive(r.id),
     onAddAll: () => actions.addRoutes(fitToAdd),
@@ -940,7 +944,7 @@ function WaveSelect({
   return (
     <div
       className={cn(
-        "flex items-center gap-1 rounded-lg bg-background p-1 shadow-sm ring-1 ring-foreground/10",
+        "flex items-center gap-1 rounded-lg border border-input bg-background p-[3px] shadow-sm",
         className
       )}
     >
@@ -971,7 +975,8 @@ function WaveSelect({
           </span>
           <ChevronDown className="text-muted-foreground" />
         </PopoverTrigger>
-        <PopoverContent align="start" className="w-72 gap-1 p-1">
+        {/* 8px below the Wave button, so the menu clears the pill's border by 4px */}
+        <PopoverContent align="start" sideOffset={8} className="w-72 gap-1 p-1">
           <ul className="flex flex-col" aria-label="Waves">
             {views.length > 1 && (
               <li className="flex items-center gap-0.5">
@@ -1114,6 +1119,10 @@ type AudienceProps = {
   onEdit: () => void
   spotId: string | null
   onSpot: (routeId: string | null) => void
+  /** The pointer is on a route on the map. A suggested route gets pointed out in the list too. */
+  onMapHover: (routeId: string | null) => void
+  /** The route's "84% fit" badge for the map's hover card. Nothing for a route that is not suggested. */
+  fitBadge: (route: Route) => React.ReactNode
   /** The suggested routes */
   routes: Route[]
   /** How many more routes "Load more" can show */
@@ -1129,6 +1138,8 @@ type AudienceProps = {
   /** How many of them are not in the selected wave yet */
   toAdd: number
   activeLabel: string
+  /** "All waves" is selected in "Add routes to" */
+  allWaves: boolean
   onAdd: (route: Route) => void
   /** Takes the route out of the selected wave */
   onRemove: (route: Route) => void
@@ -1194,18 +1205,21 @@ function FitDot() {
 
 /**
  * Sits on top of the map: the Route suggestions button next to `children`. It opens the
- * suggestions panel.
+ * suggestions panel. `inline` puts it in a toolbar instead, as in the Table view.
  */
 function AudienceButton({
   open,
   onOpenChange,
   side = "left",
+  inline = false,
   children,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Corner of the map it sits in */
   side?: "left" | "right"
+  /** In the flow of a toolbar, not floating over the map */
+  inline?: boolean
   children?: React.ReactNode
 }) {
   // On the right, the open panel covers this corner and has its own title and close button.
@@ -1213,8 +1227,11 @@ function AudienceButton({
   return (
     <div
       className={cn(
-        "absolute top-3 flex flex-col gap-1.5",
-        side === "left" ? "left-3 items-start" : "right-3 items-end"
+        "flex flex-col gap-1.5",
+        // In a toolbar, it sits at the right end.
+        inline && "ml-auto",
+        !inline && "absolute top-3",
+        !inline && (side === "left" ? "left-3 items-start" : "right-3 items-end")
       )}
     >
       <div className="flex items-center gap-1.5">
@@ -1274,6 +1291,24 @@ function AudiencePanel({
     activeLabel,
   } = audience
   const count = countFilters(filters)
+  // A route pointed out from the map scrolls into view in the list.
+  const listRef = React.useRef<HTMLUListElement>(null)
+  React.useEffect(() => {
+    const id = audience.spotId
+    const row = id
+      ? listRef.current?.querySelector<HTMLElement>(`[data-route="${id}"]`)
+      : null
+    const viewport = row?.closest<HTMLElement>(
+      '[data-slot="scroll-area-viewport"]'
+    )
+    if (!row || !viewport) return
+    const r = row.getBoundingClientRect()
+    const v = viewport.getBoundingClientRect()
+    if (r.top < v.top)
+      viewport.scrollBy({ top: r.top - v.top, behavior: "smooth" })
+    else if (r.bottom > v.bottom)
+      viewport.scrollBy({ top: r.bottom - v.bottom, behavior: "smooth" })
+  }, [audience.spotId])
   const toggle = (categoryId: string, option: string) => {
     const list = filters[categoryId] ?? []
     onChange({
@@ -1337,7 +1372,11 @@ function AudiencePanel({
                 No routes in this area. Use a larger radius.
               </p>
             ) : (
-              <ul className="flex flex-col py-1.5" aria-live="polite">
+              <ul
+                ref={listRef}
+                className="flex flex-col py-1.5"
+                aria-live="polite"
+              >
                 <li className="flex items-baseline justify-between gap-2 py-1.5 pr-4 pl-3.5 text-xs text-muted-foreground tabular-nums">
                   <span className="flex items-center gap-2">
                     <FitDot /> {routes.length}{" "}
@@ -1353,23 +1392,25 @@ function AudiencePanel({
                   return (
                     <React.Fragment key={r.id}>
                       <li
-                        className="flex items-center gap-2 py-1.5 pr-4 pl-3.5 tabular-nums hover:bg-muted/50"
+                        data-route={r.id}
+                        className={cn(
+                          "flex items-center gap-2 py-1.5 pr-4 pl-3.5 tabular-nums hover:bg-muted/50",
+                          audience.spotId === r.id && "bg-muted/50"
+                        )}
                         onPointerEnter={() => audience.onSpot(r.id)}
                         onPointerLeave={() => audience.onSpot(null)}
                         onFocus={() => audience.onSpot(r.id)}
                         onBlur={() => audience.onSpot(null)}
                       >
                         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                          <span className="flex items-center gap-2">
-                            <span className="font-medium">
-                              {r.zip} · {r.code}
-                            </span>
-                            <FitBadge percent={audience.percent[r.id]} />
+                          <span className="font-medium">
+                            {r.zip} · {r.code}
                           </span>
                           <span className="text-xs text-muted-foreground">
                             {fmtNum(r.residences)} residences
                           </span>
                         </div>
+                        <FitBadge percent={audience.percent[r.id]} />
                         <span className="font-medium">
                           {fmtMoney(r.residences * audience.rate)}
                         </span>
@@ -1796,9 +1837,10 @@ function TargetingCard({
   const panel = filtersOpen && (
     <AudiencePanel audience={audience} onClose={() => setFiltersOpen(false)} />
   )
-  const suggestions = (
+  const suggestions = (inline = false) => (
     <AudienceButton
       side="right"
+      inline={inline}
       open={filtersOpen}
       onOpenChange={setFiltersOpen}
     />
@@ -1861,6 +1903,8 @@ function TargetingCard({
             onToggle={onToggle}
             highlight={audience.ids}
             spotlight={audience.spotId}
+            fitBadge={audience.fitBadge}
+            onHoverRoute={audience.onMapHover}
             scrollZoom={false}
             {...tools}
             className="h-96"
@@ -1885,7 +1929,7 @@ function TargetingCard({
             }
           >
             {hasPlace && waveSelect("absolute top-3 left-3")}
-            {hasPlace && suggestions}
+            {hasPlace && suggestions()}
           </RouteMap>
         ) : (
           <RouteTable
@@ -1898,9 +1942,8 @@ function TargetingCard({
             onRemoveMany={onRemoveMany}
             toolbar={waveSelect()}
             sidePanel={panel}
-          >
-            {suggestions}
-          </RouteTable>
+            actions={suggestions(true)}
+          />
         )}
         <div className="flex items-center justify-between">
           {routeCount === 0 ? (
@@ -1965,7 +2008,7 @@ function RouteTable({
   onRemoveMany,
   toolbar,
   sidePanel,
-  children,
+  actions,
 }: {
   location: Location
   views: WaveView[]
@@ -1978,10 +2021,13 @@ function RouteTable({
   toolbar: React.ReactNode
   /** The Route suggestions panel, docked on the right as on the map */
   sidePanel?: React.ReactNode
-  /** Floats in the top right corner (the Route suggestions button) */
-  children?: React.ReactNode
+  /** At the right end of the toolbar, after the search (the Route suggestions button) */
+  actions?: React.ReactNode
 }) {
   const zip = placeZip(location)
+  // Route search: keeps the routes whose number contains the text, so "c01" keeps C010 to C019.
+  const [query, setQuery] = React.useState("")
+  const q = query.trim().toLowerCase().replace(/\s+/g, "")
   // No sort chosen: best fit first when filters apply, else by route number.
   const [sort, setSort] = React.useState<{
     key: SortKey
@@ -1999,14 +2045,18 @@ function RouteTable({
       : active.key === "fit"
         ? fit(r)
         : r.residences
-  const rows = ROUTES.filter(
+  const zipRoutes = ROUTES.filter(
     (r) => r.location === location.id && r.zip === zip
-  ).sort((a, b) => {
-    const va = value(a)
-    const vb = value(b)
-    const order = va < vb ? -1 : va > vb ? 1 : a.code.localeCompare(b.code)
-    return active.desc ? -order : order
-  })
+  )
+  const rows = zipRoutes
+    .filter((r) => !q || r.id.toLowerCase().includes(q))
+    .sort((a, b) => {
+      const va = value(a)
+      const vb = value(b)
+      const order =
+        va < vb ? -1 : va > vb ? 1 : a.code.localeCompare(b.code)
+      return active.desc ? -order : order
+    })
 
   const inTarget = rows.filter((r) => audience.isAdded(r))
   const allIn = rows.length > 0 && inTarget.length === rows.length
@@ -2058,6 +2108,36 @@ function RouteTable({
         style={{ paddingRight: panelOpen ? PANEL_WIDTH + 12 : undefined }}
       >
         {toolbar}
+        {/* 8px from "Add routes to": 6px of gap plus this margin. */}
+        <InputGroup className="ml-0.5 h-9 w-44 bg-background shadow-sm">
+          <InputGroupAddon>
+            <Search />
+          </InputGroupAddon>
+          <InputGroupInput
+            type="search"
+            aria-label="Search routes"
+            placeholder="Search routes"
+            autoComplete="off"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setQuery("")
+            }}
+            className="[&::-webkit-search-cancel-button]:hidden"
+          />
+          {query && (
+            <InputGroupAddon align="inline-end">
+              <InputGroupButton
+                size="icon-xs"
+                aria-label="Clear search"
+                onClick={() => setQuery("")}
+              >
+                <X />
+              </InputGroupButton>
+            </InputGroupAddon>
+          )}
+        </InputGroup>
+        {actions}
       </div>
 
       <div
@@ -2099,7 +2179,9 @@ function RouteTable({
                   colSpan={fitFilters ? 5 : 4}
                   className="py-10 text-center text-muted-foreground"
                 >
-                  No routes in this ZIP code.
+                  {q
+                    ? `No routes match "${query.trim()}".`
+                    : "No routes in this ZIP code."}
                 </TableCell>
               </TableRow>
             ) : (
@@ -2110,9 +2192,15 @@ function RouteTable({
                     key={r.id}
                     data-state={added ? "selected" : undefined}
                     className={cn(
-                      "tabular-nums",
+                      "cursor-pointer tabular-nums hover:bg-muted/50 data-[state=selected]:hover:bg-muted",
                       audience.spotId === r.id && "bg-muted/50"
                     )}
+                    // A click anywhere on the row does what its checkbox does. The checkbox handles its own clicks.
+                    onClick={(e) => {
+                      if ((e.target as HTMLElement).closest('[role="checkbox"]'))
+                        return
+                      onToggle(r)
+                    }}
                   >
                     <TableCell className="pl-3">
                       <Checkbox
@@ -2128,7 +2216,10 @@ function RouteTable({
                     <TableCell>
                       <span className="flex items-center gap-2">
                         <span className="font-medium">{r.id}</span>
-                        <RouteWaves route={r} views={views} />
+                        {/* With one wave chosen, the checkbox says it all: no dots. "All waves" shows which waves. */}
+                        {audience.allWaves && (
+                          <RouteWaves route={r} views={views} />
+                        )}
                       </span>
                     </TableCell>
                     <TableCell className="text-right">
@@ -2155,8 +2246,9 @@ function RouteTable({
         style={{ paddingRight: panelOpen ? PANEL_WIDTH + 12 : undefined }}
       >
         <span>
-          {fmtNum(rows.length)} {rows.length === 1 ? "route" : "routes"} in ZIP{" "}
-          {zip}
+          {q && `${fmtNum(rows.length)} of `}
+          {fmtNum(zipRoutes.length)}{" "}
+          {zipRoutes.length === 1 ? "route" : "routes"} in ZIP {zip}
           <span className="mx-1.5">·</span>
           {fmtNum(zipResidences)} residences
         </span>
@@ -2165,7 +2257,6 @@ function RouteTable({
         </span>
       </div>
 
-      {children}
       {sidePanel && (
         <div
           className="absolute inset-y-0 right-0 z-10 flex animate-in flex-col border-l bg-background shadow-lg duration-300 slide-in-from-right"
@@ -2246,7 +2337,7 @@ function MapDialog({
                 onActiveChange={onActiveChange}
                 onAddWave={onAddWave}
                 onRemoveWave={onRemoveWave}
-                className="p-0 shadow-none ring-0"
+                className="border-0 p-0 shadow-none"
               />
               {all ? (
                 <p className="rounded-lg border bg-muted/40 p-3 text-xs text-muted-foreground">
@@ -2350,7 +2441,9 @@ function MapDialog({
             hint={hint}
             onToggle={onToggle}
             highlight={audience.ids}
-          spotlight={audience.spotId}
+            spotlight={audience.spotId}
+            fitBadge={audience.fitBadge}
+            onHoverRoute={audience.onMapHover}
             {...tools}
             className="min-h-0"
             sidePanel={

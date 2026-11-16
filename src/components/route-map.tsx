@@ -105,10 +105,11 @@ function boundsOf(center: [number, number], miles: number): Bounds {
 
 /**
  * Every control that floats on the map uses this container: 36px tall, with 28px buttons inside.
- * Controls sit 12px from the map edge and 6px from each other.
+ * Controls sit 12px from the map edge and 6px from each other. Its border and shadow are the
+ * same as a text field's, so pills and search fields match side by side.
  */
 export const MAP_PILL =
-  "flex items-center gap-0.5 rounded-lg bg-background p-1 shadow-sm ring-1 ring-foreground/10"
+  "flex items-center gap-0.5 rounded-lg border border-input bg-background p-[3px] shadow-sm"
 
 export type MapTools = {
   /** Routes to draw: the ones inside the radius, and every selected route */
@@ -140,6 +141,10 @@ type Props = MapTools & {
   highlight?: Set<string>
   /** Id of one route to point out, for example while the pointer is on its row in a list. */
   spotlight?: string | null
+  /** How well a suggested route fits the audience, shown in its hover card (the "84% fit" badge) */
+  fitBadge?: (route: Route) => React.ReactNode
+  /** The route under the pointer changed, or the pointer left the routes (null) */
+  onHoverRoute?: (routeId: string | null) => void
   /** Zoom with the scroll wheel alone. Off for a map inside a scrolling page: there the wheel scrolls the page. */
   scrollZoom?: boolean
   /** Shown above the zoom buttons, with the other view controls (the Open map button) */
@@ -163,6 +168,8 @@ export function RouteMap({
   onToggle,
   highlight,
   spotlight,
+  fitBadge,
+  onHoverRoute,
   scrollZoom = true,
   viewControl,
   sidePanel,
@@ -189,8 +196,8 @@ export function RouteMap({
   const hovered = React.useRef<string | null>(null)
 
   // Map event handlers are attached once; they read the latest props and state from here.
-  const live = React.useRef({ tool, onToggle, onAddArea, routes })
-  live.current = { tool, onToggle, onAddArea, routes }
+  const live = React.useRef({ tool, onToggle, onAddArea, onHoverRoute, routes })
+  live.current = { tool, onToggle, onAddArea, onHoverRoute, routes }
 
   const overview = Boolean(overlay)
   const initialBounds = React.useRef(overview ? US_BOUNDS : boundsOf(center, radius))
@@ -233,7 +240,7 @@ export function RouteMap({
       const touchOn = ["boolean", ["get", "touching"], false]
       const fitOn = ["boolean", ["get", "fit"], false]
       const spotOn = ["boolean", ["feature-state", "spot"], false]
-      const strong = ["case", spotOn, 0.8, ["any", hoverOn, touchOn], 0.6, 0.42]
+      const strong = ["case", spotOn, 0.7, ["any", hoverOn, touchOn], 0.6, 0.42]
       const add = (layer: Record<string, unknown>) => map.addLayer(layer as never, labels)
       add({
         id: "routes-empty",
@@ -242,7 +249,7 @@ export function RouteMap({
         filter: ["!", ["has", "color"]],
         paint: {
           "fill-color": INK,
-          "fill-opacity": ["case", spotOn, 0.3, touchOn, 0.14, hoverOn, 0.1, fitOn, 0.1, 0],
+          "fill-opacity": ["case", spotOn, 0.18, touchOn, 0.14, hoverOn, 0.1, fitOn, 0.1, 0],
         },
       })
       add({
@@ -277,7 +284,7 @@ export function RouteMap({
         id: "routes-spot",
         type: "line",
         source: "routes",
-        paint: { "line-color": INK, "line-width": 2.5, "line-opacity": ["case", spotOn, 1, 0] },
+        paint: { "line-color": INK, "line-width": 1.5, "line-opacity": ["case", spotOn, 0.7, 0] },
       })
       add({
         id: "fits",
@@ -316,6 +323,7 @@ export function RouteMap({
       if (hovered.current) map.setFeatureState({ source: "routes", id: hovered.current }, { hover: false })
       if (id) map.setFeatureState({ source: "routes", id }, { hover: true })
       hovered.current = id
+      live.current.onHoverRoute?.(id)
     }
 
     const onPlace = (e: MapMouseEvent) =>
@@ -372,6 +380,7 @@ export function RouteMap({
       wheelTarget.removeEventListener("wheel", onWheel, { capture: true })
       setReady(false)
       mapRef.current = null
+      if (hovered.current) live.current.onHoverRoute?.(null)
       hovered.current = null
       map.remove()
     }
@@ -547,7 +556,8 @@ export function RouteMap({
           </div>
           {highlight?.has(hover.route.id) && (
             <div className="flex items-center gap-1.5 border-t px-3 py-1.5">
-              <span className="size-2.5 rounded-full bg-foreground" /> Suggested for your audience
+              Suggested
+              {fitBadge?.(hover.route)}
             </div>
           )}
           {hint?.(hover.route)}
