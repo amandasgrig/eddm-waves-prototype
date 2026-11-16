@@ -25,7 +25,8 @@ Then open the address the terminal prints (usually http://localhost:5173).
 - **Prototype state** (bottom left): jump between an empty campaign, one wave, three waves, a
   repeat campaign (the same routes mailed twice) and a campaign that still needs fixing.
 - **Address or place**: search a real address, business, city or ZIP code. The map moves there and
-  loads routes within the chosen radius.
+  loads routes within the chosen radius. A new campaign starts with no place: the map shows the US
+  and asks "Where do you want to mail?", with "Use my current location" (US locations only).
 - **Add routes to**: choose a wave, or "All waves", then click routes on the map. The Area tool
   adds every route under the circle.
 - **Route suggestions**: choose an audience, click "Suggest routes", then add the suggested routes

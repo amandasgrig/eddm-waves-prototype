@@ -346,7 +346,7 @@ function buildLocation(place: Location, index: number) {
 }
 
 const BUILT = PLACES.map(buildLocation)
-/** Suggested places, shown before the user types. */
+/** The demo places: their routes are built in advance for the prototype states. */
 export const LOCATIONS = BUILT.map((b) => b.location)
 export const LOCATION_BY_ID: Record<string, Location> = Object.fromEntries(
   LOCATIONS.map((l) => [l.id, l])

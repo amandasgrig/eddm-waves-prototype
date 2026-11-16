@@ -17,6 +17,8 @@ import {
   Circle,
   Home,
   LayoutGrid,
+  LoaderCircle,
+  LocateFixed,
   Mail,
   Expand,
   MoreHorizontal,
@@ -42,7 +44,7 @@ import {
   RouteMap,
   type MapTools,
 } from "@/components/route-map"
-import { searchPlaces } from "@/lib/geocode"
+import { inUnitedStates, placeAt, searchPlaces } from "@/lib/geocode"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -128,7 +130,6 @@ import {
 } from "@/components/ui/tooltip"
 import {
   AUDIENCE,
-  LOCATIONS,
   LOCATION_BY_ID,
   MAX_WAVES,
   MIN_DATE,
@@ -169,6 +170,13 @@ const ShowErrors = React.createContext(false)
 
 /** Value of the wave picker when a click on a route applies to every wave. */
 const ALL_WAVES = "all"
+/** Before the first search there is no place: we do not know where the client mails. */
+const NO_PLACE: Location = {
+  id: "",
+  label: "",
+  center: [-98.6, 39.8],
+  zips: [],
+}
 
 const SPRING_START = nextWeekday(new Date(2027, 2, 1))
 const firstDate = SPRING_START > MIN_DATE ? SPRING_START : MIN_DATE
@@ -268,8 +276,36 @@ export function App() {
   /** Id of the wave the user asked to remove, while the confirmation is open. */
   const [removing, setRemoving] = React.useState<string | null>(null)
   /** The location the map shows. Routes selected in other locations stay in the campaign. */
-  const [locationId, setLocationId] = React.useState("richmond")
-  const location = LOCATION_BY_ID[locationId]
+  const [locationId, setLocationId] = React.useState<string | null>(null)
+  const location = locationId ? LOCATION_BY_ID[locationId] : NO_PLACE
+  /** True while "Use my current location" waits for the browser and the place search. */
+  const [locating, setLocating] = React.useState(false)
+  const locate = () => {
+    const fail = (message: string) => {
+      setLocating(false)
+      toast(message)
+    }
+    if (!navigator.geolocation)
+      return fail(
+        "Your browser can't share your location. Search an address instead."
+      )
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      async ({ coords }) => {
+        const center: [number, number] = [coords.longitude, coords.latitude]
+        // EDDM is a USPS service: a client elsewhere has to search a US address.
+        if (!inUnitedStates(center))
+          return fail(
+            "You're outside the US. Search a US address, a city or a ZIP code."
+          )
+        const place = await placeAt(center)
+        setLocationId(addLocation(place).id)
+        setLocating(false)
+      },
+      () => fail("We couldn't get your location. Search an address instead."),
+      { timeout: 10000 }
+    )
+  }
   /** Routes load up to this many miles from the location. */
   const [radius, setRadius] = React.useState(RADIUS.initial)
   // The map shows the routes inside the radius, and every selected route, so a selection never disappears.
@@ -643,6 +679,9 @@ export function App() {
                     audience={audience}
                     location={location}
                     onLocationChange={setLocationId}
+                    hasPlace={locationId !== null}
+                    onLocate={locate}
+                    locating={locating}
                     views={views}
                     activeId={activeKey}
                     onActiveChange={setActiveWave}
@@ -674,7 +713,13 @@ export function App() {
 
                 <SummaryCard
                   name={name}
-                  locations={usedLocations.length ? usedLocations : [location]}
+                  locations={
+                    usedLocations.length
+                      ? usedLocations
+                      : locationId
+                        ? [location]
+                        : []
+                  }
                   views={views}
                   routeCount={routeCount}
                   residences={residences}
@@ -697,6 +742,9 @@ export function App() {
             audience={audience}
             location={location}
             onLocationChange={setLocationId}
+            hasPlace={locationId !== null}
+            onLocate={locate}
+            locating={locating}
             activeId={activeKey}
             onActiveChange={setActiveWave}
             onAddWave={actions.addWave}
@@ -730,6 +778,7 @@ export function App() {
                   aria-pressed={preset === key}
                   onClick={() => {
                     setPreset(key)
+                    setLocationId(key === "empty" ? null : "richmond")
                     resetState(PRESETS[key].build())
                     setShowErrors(false)
                   }}
@@ -1521,7 +1570,7 @@ function LocationSearch({
   React.useEffect(() => setText(location.label), [location])
 
   const q = text.trim()
-  // Before the user types something new, the list shows a few suggested places.
+  // The list opens once the user types something new: we do not know where they mail.
   const searching = q.length >= 3 && q !== location.label
   React.useEffect(() => {
     if (!searching) {
@@ -1548,7 +1597,7 @@ function LocationSearch({
     }
   }, [q, searching])
 
-  const matches = searching ? results : LOCATIONS
+  const matches = searching ? results : []
   const pick = (place: Location) => {
     onChange(addLocation(place).id)
     setText(place.label)
@@ -1613,25 +1662,17 @@ function LocationSearch({
           }}
         />
       </InputGroup>
-      {open && (
+      {open && searching && (
         <ul
           id={listId}
           role="listbox"
           className="absolute top-full z-20 mt-1 flex w-full flex-col rounded-lg bg-popover p-1 text-popover-foreground shadow-md ring-1 ring-foreground/10"
         >
-          {!searching && (
-            <li
-              role="presentation"
-              className="px-2 pt-1 pb-0.5 text-xs text-muted-foreground"
-            >
-              Suggested
-            </li>
-          )}
-          {searching && status === "error" ? (
+          {status === "error" ? (
             <li className="px-2 py-1.5 text-muted-foreground">
               Search is not available. Check your connection and try again.
             </li>
-          ) : searching && status === "loading" && results.length === 0 ? (
+          ) : status === "loading" && results.length === 0 ? (
             <li className="px-2 py-1.5 text-muted-foreground">Searching…</li>
           ) : matches.length === 0 ? (
             <li className="px-2 py-1.5 text-muted-foreground">
@@ -1677,6 +1718,36 @@ function LocationSearch({
   )
 }
 
+/** Shown on the map until a place is chosen, as in Figma "Targeting · Empty state". */
+function PlacePrompt({
+  onLocate,
+  locating,
+}: {
+  onLocate: () => void
+  locating: boolean
+}) {
+  return (
+    <div className="flex w-full max-w-sm flex-col items-center gap-4 rounded-xl bg-background p-6 text-center shadow-lg ring-1 ring-foreground/10">
+      <span className="flex size-12 items-center justify-center rounded-full bg-muted">
+        <MapPin className="size-6" />
+      </span>
+      <div className="flex flex-col gap-1.5">
+        <p className="font-heading text-base font-semibold">
+          Where do you want to mail?
+        </p>
+        <p className="text-muted-foreground">
+          Search an address, a city or a ZIP code to see the carrier routes
+          around it.
+        </p>
+      </div>
+      <Button variant="outline" onClick={onLocate} disabled={locating}>
+        {locating ? <LoaderCircle className="animate-spin" /> : <LocateFixed />}
+        {locating ? "Finding your location…" : "Use my current location"}
+      </Button>
+    </div>
+  )
+}
+
 function TargetingCard({
   colors,
   hint,
@@ -1684,6 +1755,9 @@ function TargetingCard({
   audience,
   location,
   onLocationChange,
+  hasPlace,
+  onLocate,
+  locating,
   views,
   activeId,
   onActiveChange,
@@ -1704,6 +1778,10 @@ function TargetingCard({
   audience: AudienceProps
   location: Location
   onLocationChange: (locationId: string) => void
+  /** False until the user searched a place or shared their location */
+  hasPlace: boolean
+  onLocate: () => void
+  locating: boolean
   views: WaveView[]
   activeId: string
   onActiveChange: (id: string) => void
@@ -1779,7 +1857,11 @@ function TargetingCard({
             trailing={<RadiusSelect tools={tools} />}
           />
         </div>
-        {view === "map" ? (
+        {view === "table" && !hasPlace ? (
+          <div className="flex h-96 items-center justify-center rounded-lg border bg-muted/40 p-4">
+            <PlacePrompt onLocate={onLocate} locating={locating} />
+          </div>
+        ) : view === "map" ? (
           <RouteMap
             colors={colors}
             hint={hint}
@@ -1790,6 +1872,11 @@ function TargetingCard({
             {...tools}
             className="h-96"
             sidePanel={panel}
+            overlay={
+              !hasPlace && (
+                <PlacePrompt onLocate={onLocate} locating={locating} />
+              )
+            }
             viewControl={
               <div className={MAP_PILL}>
                 <IconButton
@@ -1804,8 +1891,8 @@ function TargetingCard({
               </div>
             }
           >
-            {waveSelect("absolute top-3 left-3")}
-            {suggestions}
+            {hasPlace && waveSelect("absolute top-3 left-3")}
+            {hasPlace && suggestions}
           </RouteMap>
         ) : (
           <RouteTable
@@ -1832,9 +1919,11 @@ function TargetingCard({
               )}
             >
               {showErrors && <CircleAlert className="size-3.5 shrink-0" />}
-              {view === "map"
-                ? "No routes selected. Click a route on the map to add it to Wave 1."
-                : "No routes selected. Tick a route in the table to add it to Wave 1."}
+              {!hasPlace
+                ? "No routes selected. Search a place to see its routes."
+                : view === "map"
+                  ? "No routes selected. Click a route on the map to add it to Wave 1."
+                  : "No routes selected. Tick a route in the table to add it to Wave 1."}
             </span>
           ) : (
             <span>
@@ -2155,6 +2244,9 @@ function MapDialog({
   audience,
   location,
   onLocationChange,
+  hasPlace,
+  onLocate,
+  locating,
   activeId,
   onActiveChange,
   onAddWave,
@@ -2172,6 +2264,9 @@ function MapDialog({
   audience: AudienceProps
   location: Location
   onLocationChange: (locationId: string) => void
+  hasPlace: boolean
+  onLocate: () => void
+  locating: boolean
   activeId: string
   onActiveChange: (id: string) => void
   onAddWave: () => void
@@ -2322,6 +2417,11 @@ function MapDialog({
                 />
               )
             }
+            overlay={
+              !hasPlace && (
+                <PlacePrompt onLocate={onLocate} locating={locating} />
+              )
+            }
           >
             <LocationSearch
               location={location}
@@ -2330,11 +2430,13 @@ function MapDialog({
               groupClassName="h-9 bg-background shadow-sm"
               trailing={<RadiusSelect tools={tools} />}
             />
-            <AudienceButton
-              side="right"
-              open={filtersOpen}
-              onOpenChange={setFiltersOpen}
-            />
+            {hasPlace && (
+              <AudienceButton
+                side="right"
+                open={filtersOpen}
+                onOpenChange={setFiltersOpen}
+              />
+            )}
           </RouteMap>
         </div>
       </DialogContent>
@@ -2825,7 +2927,7 @@ function SummaryCard({
     ["Campaign name", name || pending],
     [
       locations.length > 1 ? "Locations" : "Location",
-      locations.map((l) => l.label).join(" · "),
+      locations.length ? locations.map((l) => l.label).join(" · ") : pending,
     ],
     ["Routes", routeCount ? fmtNum(routeCount) : pending],
     ["Residences", routeCount ? fmtNum(residences) : pending],
