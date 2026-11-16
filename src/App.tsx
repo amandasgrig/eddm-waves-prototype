@@ -19,7 +19,6 @@ import {
   LayoutGrid,
   Mail,
   Expand,
-  Minus,
   MoreHorizontal,
   Plus,
   Search,
@@ -28,8 +27,6 @@ import {
   X,
   Map as MapIcon,
   MapPin,
-  Merge,
-  Split,
   Table2,
   Trash2,
   Users,
@@ -76,7 +73,6 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
@@ -151,8 +147,6 @@ import {
   newWaveId,
   ROUTE_BY_ID,
   nextWeekday,
-  pricePerPiece,
-  quote,
   scheduleDates,
   splitRoutes,
   type Assignment,
@@ -259,7 +253,6 @@ export function App() {
   const [mapOpen, setMapOpen] = React.useState(false)
   /** The route the user asked to see on the map. */
   const [focus, setFocus] = React.useState<{ id: string; key: number }>()
-  const [splitOpen, setSplitOpen] = React.useState(false)
   const [activeWave, setActiveWave] = React.useState<string | null>(null)
   const [filters, setFilters] = React.useState<AudienceFilters>({})
   /** The filters the current suggestions come from. Null until the user asks for suggestions. */
@@ -317,7 +310,6 @@ export function App() {
   /** Pieces printed: a route in three waves counts three times. */
   const pieces = views.reduce((s, v) => s + v.residences, 0)
   const total = views.reduce((s, v) => s + v.subtotal, 0)
-  const singleTotal = residences * pricePerPiece(residences)
   const issueCount = views.reduce((s, v) => s + v.issues.length, 0)
   const ready = routeCount > 0 && issueCount === 0
   const [showErrors, setShowErrors] = React.useState(false)
@@ -541,33 +533,6 @@ export function App() {
         ),
       }))
     },
-    applySplit(count: number, first: Date, everyWeeks: number) {
-      setState((s) =>
-        makeState(
-          splitRoutes(Object.keys(s.assignment), count),
-          scheduleDates(first, count, everyWeeks)
-        )
-      )
-      offerUndo(`Routes distributed into ${count} waves.`)
-    },
-    sendOnOneDate() {
-      setState((s) =>
-        makeState([Object.keys(s.assignment)], [views[0].wave.date])
-      )
-      offerUndo(`${views.length} waves merged into one.`)
-    },
-  }
-
-  /**
-   * These two actions replace every wave at once, so a message offers to take them back.
-   * Undo restores the schedule as it was before the action, also if the user changed something after.
-   */
-  function offerUndo(message: string) {
-    const before = state
-    toast(message, {
-      duration: 10000,
-      action: { label: "Undo", onClick: () => setState(() => before) },
-    })
   }
 
   const audience: AudienceProps = {
@@ -699,9 +664,7 @@ export function App() {
 
                   <ScheduleCard
                     views={views}
-                    residences={residences}
                     actions={actions}
-                    onSplit={() => setSplitOpen(true)}
                     onOpenMap={(waveId) => {
                       setActiveWave(waveId)
                       setMapOpen(true)
@@ -741,17 +704,6 @@ export function App() {
             onToggle={actions.toggleRoute}
             onRemove={actions.removeFromActive}
             onShow={actions.showOnMap}
-          />
-          <SplitDialog
-            key={String(splitOpen)}
-            open={splitOpen}
-            onOpenChange={setSplitOpen}
-            routeIds={Object.keys(state.assignment)}
-            residences={residences}
-            initialCount={multi ? views.length : 3}
-            initialDate={views[0].wave.date ?? firstDate}
-            singleTotal={singleTotal}
-            onApply={actions.applySplit}
           />
 
           <RemoveWaveDialog
@@ -843,8 +795,6 @@ type Actions = {
   setDate: (waveId: string, date: Date) => void
   addWave: () => void
   removeWave: (waveId: string) => void
-  applySplit: (count: number, first: Date, everyWeeks: number) => void
-  sendOnOneDate: () => void
 }
 
 /* ------------------------------------------------------------------ shell */
@@ -2484,20 +2434,13 @@ function WaveDots({ views }: { views: WaveView[] }) {
 
 function ScheduleCard({
   views,
-  residences,
   actions,
-  onSplit,
   onOpenMap,
 }: {
   views: WaveView[]
-  residences: number
   actions: Actions
-  onSplit: () => void
   onOpenMap: (waveId: string) => void
 }) {
-  const multi = views.length > 1
-  const canSplit = residences >= WAVE_MINIMUM * 2
-
   return (
     <Card>
       <CardHeader>
@@ -2506,29 +2449,6 @@ function ScheduleCard({
           Each wave is printed and mailed on its own date, and priced on its own
           size. Add a wave to mail routes on another date.
         </CardDescription>
-        <CardAction>
-          <DropdownMenu>
-            <IconButton
-              trigger={<DropdownMenuTrigger />}
-              variant="outline"
-              size="icon"
-              label="Schedule options"
-            >
-              <MoreHorizontal />
-            </IconButton>
-            <DropdownMenuContent align="end" className="w-60">
-              <DropdownMenuItem disabled={!canSplit} onClick={onSplit}>
-                <Split /> Distribute routes evenly…
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={!multi}
-                onClick={actions.sendOnOneDate}
-              >
-                <Merge /> Merge into one wave
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </CardAction>
       </CardHeader>
 
       <CardContent className="flex flex-col gap-3">
@@ -2872,197 +2792,6 @@ function WaveRow({
         </CollapsibleContent>
       </Collapsible>
     </li>
-  )
-}
-
-function SplitDialog({
-  open,
-  onOpenChange,
-  routeIds,
-  residences,
-  initialCount,
-  initialDate,
-  singleTotal,
-  onApply,
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  routeIds: string[]
-  residences: number
-  initialCount: number
-  initialDate: Date
-  singleTotal: number
-  onApply: (count: number, first: Date, everyWeeks: number) => void
-}) {
-  const maxCount = Math.max(
-    2,
-    Math.min(MAX_WAVES, Math.floor(residences / WAVE_MINIMUM), routeIds.length)
-  )
-  const [count, setCount] = React.useState(Math.min(initialCount, maxCount))
-  const [first, setFirst] = React.useState(initialDate)
-  const [weeks, setWeeks] = React.useState("1")
-
-  const groups = React.useMemo(
-    () => splitRoutes(routeIds, count),
-    [routeIds, count]
-  )
-  const rows = quote(groups)
-  const dates = scheduleDates(first, count, Number(weeks))
-  const total = rows.reduce((s, r) => s + r.subtotal, 0)
-  const belowMin = rows.some((r) => r.residences < WAVE_MINIMUM)
-  const cadences = [
-    { value: "1", label: "Every week" },
-    { value: "2", label: "Every 2 weeks" },
-    { value: "3", label: "Every 3 weeks" },
-    { value: "4", label: "Every 4 weeks" },
-  ]
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Distribute routes evenly</DialogTitle>
-          <DialogDescription>
-            This replaces your current waves. Each route goes into one wave.
-            Waves get a similar size and keep neighbouring routes together. You
-            can still change any route afterwards.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="grid grid-cols-[auto_1fr_1fr] gap-3">
-          <div className="flex flex-col gap-2">
-            <Label id="count-label">Waves</Label>
-            <div
-              className="flex items-center gap-1"
-              role="group"
-              aria-labelledby="count-label"
-            >
-              <IconButton
-                variant="outline"
-                size="icon"
-                label="Fewer waves"
-                disabled={count <= 2}
-                onClick={() => setCount(count - 1)}
-              >
-                <Minus />
-              </IconButton>
-              <span
-                className="w-7 text-center font-medium tabular-nums"
-                aria-live="polite"
-              >
-                {count}
-              </span>
-              <IconButton
-                variant="outline"
-                size="icon"
-                label="More waves"
-                disabled={count >= maxCount}
-                onClick={() => setCount(count + 1)}
-              >
-                <Plus />
-              </IconButton>
-            </div>
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="first-date">First mailing</Label>
-            <DatePicker
-              id="first-date"
-              value={first}
-              onChange={setFirst}
-              className="w-full"
-            />
-          </div>
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="cadence">Then</Label>
-            <Select
-              items={cadences}
-              value={weeks}
-              onValueChange={(v) => v && setWeeks(v)}
-            >
-              <SelectTrigger id="cadence" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {cadences.map((c) => (
-                  <SelectItem key={c.value} value={c.value}>
-                    {c.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <div className="rounded-lg border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="pl-3">Wave</TableHead>
-                <TableHead>Mails on</TableHead>
-                <TableHead className="text-right">Residences</TableHead>
-                <TableHead className="pr-3 text-right">Subtotal</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r, i) => (
-                <TableRow key={i}>
-                  <TableCell className="pl-3 font-medium">
-                    Wave {i + 1}
-                  </TableCell>
-                  <TableCell className="tabular-nums">
-                    {fmtDate(dates[i], "EEE, MMM d")}
-                  </TableCell>
-                  <TableCell
-                    className={cn(
-                      "text-right tabular-nums",
-                      r.residences < WAVE_MINIMUM && "text-destructive"
-                    )}
-                  >
-                    {fmtNum(r.residences)}
-                  </TableCell>
-                  <TableCell className="pr-3 text-right tabular-nums">
-                    {fmtMoney(r.subtotal)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-
-        <div className="flex items-baseline justify-between">
-          <span className="text-muted-foreground">
-            {total - singleTotal > 0.005
-              ? `${fmtMoney(total - singleTotal)} more than mailing on one date`
-              : "Same price as mailing on one date"}
-          </span>
-          <span className="font-medium tabular-nums">
-            Total {fmtMoney(total)}
-          </span>
-        </div>
-        {belowMin && (
-          <p className="flex items-start gap-1.5 text-destructive">
-            <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
-            Each wave needs at least {fmtNum(WAVE_MINIMUM)} residences. Use
-            fewer waves or add routes.
-          </p>
-        )}
-
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
-          </Button>
-          <Button
-            disabled={belowMin}
-            onClick={() => {
-              onApply(count, first, Number(weeks))
-              onOpenChange(false)
-            }}
-          >
-            Distribute into {count} waves
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   )
 }
 
