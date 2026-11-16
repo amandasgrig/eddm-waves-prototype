@@ -1066,7 +1066,7 @@ function WaveSelect({
           variant="ghost"
           size="icon-sm"
           label="What are waves?"
-          side="right"
+          side="bottom"
         >
           <CircleQuestionMark />
         </IconButton>
